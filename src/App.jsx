@@ -285,8 +285,26 @@ function AppContent() {
     try {
       setIsLoadingProjects(true);
       const response = await api.projects();
+
+      // Handle rate limiting and other non-OK responses
+      if (!response.ok) {
+        console.error(`Failed to fetch projects: ${response.status} ${response.statusText}`);
+        if (response.status === 429) {
+          console.warn('Rate limit exceeded. Please wait before refreshing.');
+        }
+        setIsLoadingProjects(false);
+        return;
+      }
+
       const data = await response.json();
-      
+
+      // Ensure data is an array
+      if (!Array.isArray(data)) {
+        console.error('Invalid projects data received:', data);
+        setIsLoadingProjects(false);
+        return;
+      }
+
       // Always fetch Cursor sessions for each project so we can combine views
       for (let project of data) {
         try {

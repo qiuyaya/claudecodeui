@@ -184,6 +184,62 @@ The application will start at the port you specified in your .env
 5. **Open your browser:**
    - Development: `http://localhost:3001`
 
+## 🔒 Security
+
+**⚠️ IMPORTANT**: Before deploying to production, please read [SECURITY.md](SECURITY.md) and complete all required security configurations.
+
+### Quick Security Setup
+
+For production deployments, you **MUST** configure the following:
+
+1. **Generate JWT Secret** (Required):
+   ```bash
+   # Generate a secure 32+ character secret
+   openssl rand -base64 32
+
+   # Add to your .env file
+   echo "JWT_SECRET=<your_generated_secret>" >> .env
+   ```
+
+2. **Configure CORS** (Required):
+   ```bash
+   # Set allowed origins for your domain
+   echo "ALLOWED_ORIGINS=https://yourdomain.com" >> .env
+   ```
+
+3. **Enable Production Mode** (Required):
+   ```bash
+   echo "NODE_ENV=production" >> .env
+   echo "FORCE_HTTPS=true" >> .env
+   ```
+
+### Security Features
+
+This application includes comprehensive security measures:
+
+- ✅ JWT-based authentication with refresh tokens
+- ✅ bcrypt password hashing
+- ✅ Rate limiting on authentication and API endpoints
+- ✅ CORS security policies
+- ✅ Command execution allowlist
+- ✅ Request size and concurrency limits
+- ✅ HTTPS enforcement with security headers
+- ✅ WebSocket authentication via secure subprotocol
+- ✅ Error sanitization to prevent information leakage
+- ✅ Comprehensive audit logging
+
+### Production Deployment Checklist
+
+- [ ] JWT_SECRET configured (minimum 32 characters)
+- [ ] ALLOWED_ORIGINS set to your domain
+- [ ] NODE_ENV set to production
+- [ ] HTTPS configured (or reverse proxy with SSL)
+- [ ] Database file permissions set to 600
+- [ ] Log directory permissions set to 700
+- [ ] Application running as non-root user
+
+For detailed security information, deployment guides, and best practices, see [SECURITY.md](SECURITY.md).
+
 ## Security & Tools Configuration
 
 **🔒 Important Notice**: All Claude Code tools are **disabled by default**. This prevents potentially harmful operations from running automatically.

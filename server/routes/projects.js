@@ -332,10 +332,10 @@ async function getGithubTokenById(tokenId, userId) {
 
 /**
  * Clone repository with progress streaming (SSE)
- * GET /api/projects/clone-progress
+ * POST /api/projects/clone-progress
  */
-router.get('/clone-progress', async (req, res) => {
-  const { path: workspacePath, githubUrl, githubTokenId, newGithubToken } = req.query;
+router.post('/clone-progress', async (req, res) => {
+  const { path: workspacePath, githubUrl, githubTokenId, newGithubToken } = req.body;
 
   res.setHeader('Content-Type', 'text/event-stream');
   res.setHeader('Cache-Control', 'no-cache');

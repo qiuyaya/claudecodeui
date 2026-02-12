@@ -41,6 +41,16 @@ export const AuthProvider = ({ children }) => {
     }
 
     checkAuthStatus();
+
+    // Listen for token expiration events from authenticatedFetch
+    const handleTokenExpired = () => {
+      setToken(null);
+      setUser(null);
+      localStorage.removeItem('auth-token');
+      localStorage.removeItem('refresh-token');
+    };
+    window.addEventListener('auth-token-expired', handleTokenExpired);
+    return () => window.removeEventListener('auth-token-expired', handleTokenExpired);
   }, []);
 
   const checkOnboardingStatus = async () => {
@@ -86,14 +96,16 @@ export const AuthProvider = ({ children }) => {
             setNeedsSetup(false);
             await checkOnboardingStatus();
           } else {
-            // Token is invalid
+            // Token is invalid, clear all tokens
             localStorage.removeItem('auth-token');
+            localStorage.removeItem('refresh-token');
             setToken(null);
             setUser(null);
           }
         } catch (error) {
           console.error('Token verification failed:', error);
           localStorage.removeItem('auth-token');
+          localStorage.removeItem('refresh-token');
           setToken(null);
           setUser(null);
         }
@@ -114,9 +126,26 @@ export const AuthProvider = ({ children }) => {
       const data = await response.json();
 
       if (response.ok) {
-        setToken(data.token);
+        // Store both access and refresh tokens
+        const accessToken = data.accessToken || data.token; // Backward compatibility
+        const refreshToken = data.refreshToken;
+
+        setToken(accessToken);
         setUser(data.user);
-        localStorage.setItem('auth-token', data.token);
+        localStorage.setItem('auth-token', accessToken);
+
+        if (refreshToken) {
+          localStorage.setItem('refresh-token', refreshToken);
+        }
+
+        // Check onboarding status and set loading to false
+        try {
+          await checkOnboardingStatus();
+        } catch (e) {
+          console.error('Failed to check onboarding status:', e);
+        }
+        setIsLoading(false);
+
         return { success: true };
       } else {
         setError(data.error || 'Login failed');
@@ -138,10 +167,19 @@ export const AuthProvider = ({ children }) => {
       const data = await response.json();
 
       if (response.ok) {
-        setToken(data.token);
+        // Store both access and refresh tokens
+        const accessToken = data.accessToken || data.token; // Backward compatibility
+        const refreshToken = data.refreshToken;
+
+        setToken(accessToken);
         setUser(data.user);
         setNeedsSetup(false);
-        localStorage.setItem('auth-token', data.token);
+        localStorage.setItem('auth-token', accessToken);
+
+        if (refreshToken) {
+          localStorage.setItem('refresh-token', refreshToken);
+        }
+
         return { success: true };
       } else {
         setError(data.error || 'Registration failed');
@@ -156,16 +194,18 @@ export const AuthProvider = ({ children }) => {
   };
 
   const logout = () => {
-    setToken(null);
-    setUser(null);
-    localStorage.removeItem('auth-token');
-    
-    // Optional: Call logout endpoint for logging
+    // Call logout endpoint to revoke refresh token
     if (token) {
       api.auth.logout().catch(error => {
         console.error('Logout endpoint error:', error);
       });
     }
+
+    // Clear all auth data
+    setToken(null);
+    setUser(null);
+    localStorage.removeItem('auth-token');
+    localStorage.removeItem('refresh-token');
   };
 
   const value = {

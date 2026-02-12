@@ -125,6 +125,7 @@ function Shell({ selectedProject, selectedSession, initialCommand, isPlainShell 
       if (IS_PLATFORM) {
         const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
         wsUrl = `${protocol}//${window.location.host}/shell`;
+        ws.current = new WebSocket(wsUrl);
       } else {
         const token = localStorage.getItem('auth-token');
         if (!token) {
@@ -133,10 +134,9 @@ function Shell({ selectedProject, selectedSession, initialCommand, isPlainShell 
         }
 
         const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-        wsUrl = `${protocol}//${window.location.host}/shell?token=${encodeURIComponent(token)}`;
+        wsUrl = `${protocol}//${window.location.host}/shell`;
+        ws.current = new WebSocket(wsUrl, [`token.${token}`]);
       }
-
-      ws.current = new WebSocket(wsUrl);
 
       ws.current.onopen = () => {
         setIsConnected(true);
@@ -191,10 +191,20 @@ function Shell({ selectedProject, selectedSession, initialCommand, isPlainShell 
             setAuthUrl(data.url);
             setAuthUrlCopyStatus('idle');
           } else if (data.type === 'url_open') {
-            if (data.url) {
-              authUrlRef.current = data.url;
-              setAuthUrl(data.url);
-              setAuthUrlCopyStatus('idle');
+            // Validate URL protocol to prevent javascript: or other dangerous schemes
+            try {
+              const parsedUrl = new URL(data.url);
+              if (parsedUrl.protocol === 'http:' || parsedUrl.protocol === 'https:') {
+                if (data.url) {
+                  authUrlRef.current = data.url;
+                  setAuthUrl(data.url);
+                  setAuthUrlCopyStatus('idle');
+                }
+              } else {
+                console.warn('[Shell] Blocked opening URL with unsafe protocol:', parsedUrl.protocol);
+              }
+            } catch (e) {
+              console.warn('[Shell] Invalid URL received:', data.url);
             }
           }
         } catch (error) {

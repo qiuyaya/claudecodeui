@@ -3,6 +3,7 @@ import crossSpawn from 'cross-spawn';
 import { promises as fs } from 'fs';
 import path from 'path';
 import os from 'os';
+import { getSanitizedEnv } from './utils/env.js';
 
 // Use cross-spawn on Windows for better command execution
 const spawnFunction = process.platform === 'win32' ? crossSpawn : spawn;
@@ -60,7 +61,7 @@ async function spawnCursor(command, options = {}, ws) {
     const cursorProcess = spawnFunction('cursor-agent', args, {
       cwd: workingDir,
       stdio: ['pipe', 'pipe', 'pipe'],
-      env: { ...process.env } // Inherit all environment variables
+      env: getSanitizedEnv()
     });
     
     // Store process reference for potential abort

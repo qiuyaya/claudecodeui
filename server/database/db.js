@@ -4,6 +4,7 @@ import fs from 'fs';
 import crypto from 'crypto';
 import { fileURLToPath } from 'url';
 import { dirname } from 'path';
+import { encrypt, decrypt, hashApiKey, hashApiKeyLegacy, hashRefreshToken } from '../utils/crypto.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -43,6 +44,14 @@ if (process.env.DATABASE_PATH) {
 // Create database connection
 const db = new Database(DB_PATH);
 
+// Set restrictive file permissions on database
+try {
+  fs.chmodSync(DB_PATH, 0o600);
+} catch (e) {
+  // May fail on Windows or certain filesystems
+  console.warn('Could not set database file permissions:', e.message);
+}
+
 // Show app installation path prominently
 const appInstallPath = path.join(__dirname, '../..');
 console.log('');
@@ -73,6 +82,46 @@ const runMigrations = () => {
     if (!columnNames.includes('has_completed_onboarding')) {
       console.log('Running migration: Adding has_completed_onboarding column');
       db.exec('ALTER TABLE users ADD COLUMN has_completed_onboarding BOOLEAN DEFAULT 0');
+    }
+
+    // Check if refresh_tokens table exists
+    const tables = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='refresh_tokens'").all();
+    if (tables.length === 0) {
+      console.log('Running migration: Creating refresh_tokens table');
+      db.exec(`
+        CREATE TABLE refresh_tokens (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          user_id INTEGER NOT NULL,
+          token_hash TEXT NOT NULL,
+          expires_at DATETIME NOT NULL,
+          created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+          is_revoked BOOLEAN DEFAULT 0,
+          FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+        );
+        CREATE INDEX idx_refresh_tokens_hash ON refresh_tokens(token_hash);
+        CREATE INDEX idx_refresh_tokens_user ON refresh_tokens(user_id);
+        CREATE INDEX idx_refresh_tokens_expires ON refresh_tokens(expires_at);
+        CREATE INDEX idx_refresh_tokens_revoked ON refresh_tokens(is_revoked);
+      `);
+    }
+
+    // Check if app_settings table exists (for tracking migration deadlines)
+    const settingsTables = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='app_settings'").all();
+    if (settingsTables.length === 0) {
+      console.log('Running migration: Creating app_settings table');
+      db.exec(`
+        CREATE TABLE app_settings (
+          key TEXT PRIMARY KEY,
+          value TEXT NOT NULL,
+          updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        );
+      `);
+    }
+
+    // Record first startup time for migration deadline tracking
+    const firstStartup = db.prepare("SELECT value FROM app_settings WHERE key = 'first_startup'").get();
+    if (!firstStartup) {
+      db.prepare("INSERT INTO app_settings (key, value) VALUES ('first_startup', ?)").run(new Date().toISOString());
     }
 
     console.log('Database migrations completed successfully');
@@ -204,8 +253,10 @@ const apiKeysDb = {
   createApiKey: (userId, keyName) => {
     try {
       const apiKey = apiKeysDb.generateApiKey();
+      const apiKeyHash = hashApiKey(apiKey);
       const stmt = db.prepare('INSERT INTO api_keys (user_id, key_name, api_key) VALUES (?, ?, ?)');
-      const result = stmt.run(userId, keyName, apiKey);
+      const result = stmt.run(userId, keyName, apiKeyHash);
+      // Return the plaintext key only once at creation time
       return { id: result.lastInsertRowid, keyName, apiKey };
     } catch (err) {
       throw err;
@@ -225,12 +276,57 @@ const apiKeysDb = {
   // Validate API key and get user
   validateApiKey: (apiKey) => {
     try {
-      const row = db.prepare(`
+      const apiKeyHash = hashApiKey(apiKey);
+      const query = db.prepare(`
         SELECT u.id, u.username, ak.id as api_key_id
         FROM api_keys ak
         JOIN users u ON ak.user_id = u.id
         WHERE ak.api_key = ? AND ak.is_active = 1 AND u.is_active = 1
-      `).get(apiKey);
+      `);
+
+      // Try HMAC hash lookup first (current format)
+      let row = query.get(apiKeyHash);
+
+      if (!row) {
+        // Fallback: try legacy SHA-256 hash
+        const legacyHash = hashApiKeyLegacy(apiKey);
+        row = query.get(legacyHash);
+
+        if (row) {
+          // Migrate from legacy SHA-256 to HMAC hash
+          db.prepare('UPDATE api_keys SET api_key = ? WHERE id = ?').run(apiKeyHash, row.api_key_id);
+          console.warn('[SECURITY] Migrated legacy SHA-256 API key to HMAC storage. Please regenerate API keys soon.');
+        }
+      }
+
+      if (!row) {
+        // Fallback: try matching plaintext for very old keys
+        // This fallback is only available during the migration period (30 days from first startup)
+        const migrationDeadlineDays = parseInt(process.env.LEGACY_API_KEY_MIGRATION_DAYS) || 30;
+        const firstStartup = db.prepare("SELECT value FROM app_settings WHERE key = 'first_startup'").get();
+
+        if (firstStartup) {
+          const deadline = new Date(firstStartup.value);
+          deadline.setDate(deadline.getDate() + migrationDeadlineDays);
+
+          if (new Date() > deadline) {
+            console.warn('[SECURITY] Plaintext API key migration period has expired. Plaintext API keys are no longer accepted.');
+            console.warn(`[SECURITY] Migration deadline was: ${deadline.toISOString()}`);
+            console.warn('[SECURITY] Please regenerate your API keys from the UI.');
+            // Do not attempt plaintext lookup after deadline
+            return row; // null
+          }
+        }
+
+        row = query.get(apiKey);
+
+        if (row) {
+          db.prepare('UPDATE api_keys SET api_key = ? WHERE id = ?').run(apiKeyHash, row.api_key_id);
+          console.warn('[SECURITY] Migrated plaintext API key to HMAC storage.');
+          console.warn('[SECURITY] WARNING: Plaintext API key fallback will be removed after the migration period.');
+          console.warn('[SECURITY] Please regenerate your API keys from the UI to ensure continued access.');
+        }
+      }
 
       if (row) {
         // Update last_used timestamp
@@ -271,8 +367,9 @@ const credentialsDb = {
   // Create a new credential
   createCredential: (userId, credentialName, credentialType, credentialValue, description = null) => {
     try {
+      const encryptedValue = encrypt(credentialValue);
       const stmt = db.prepare('INSERT INTO user_credentials (user_id, credential_name, credential_type, credential_value, description) VALUES (?, ?, ?, ?, ?)');
-      const result = stmt.run(userId, credentialName, credentialType, credentialValue, description);
+      const result = stmt.run(userId, credentialName, credentialType, encryptedValue, description);
       return { id: result.lastInsertRowid, credentialName, credentialType };
     } catch (err) {
       throw err;
@@ -303,7 +400,14 @@ const credentialsDb = {
   getActiveCredential: (userId, credentialType) => {
     try {
       const row = db.prepare('SELECT credential_value FROM user_credentials WHERE user_id = ? AND credential_type = ? AND is_active = 1 ORDER BY created_at DESC LIMIT 1').get(userId, credentialType);
-      return row?.credential_value || null;
+      if (!row?.credential_value) return null;
+      try {
+        return decrypt(row.credential_value);
+      } catch (e) {
+        // Handle legacy unencrypted values during migration
+        console.warn('Failed to decrypt credential, may be legacy plaintext:', e.message);
+        return row.credential_value;
+      }
     } catch (err) {
       throw err;
     }
@@ -326,6 +430,122 @@ const credentialsDb = {
       const stmt = db.prepare('UPDATE user_credentials SET is_active = ? WHERE id = ? AND user_id = ?');
       const result = stmt.run(isActive ? 1 : 0, credentialId, userId);
       return result.changes > 0;
+    } catch (err) {
+      throw err;
+    }
+  }
+};
+
+// Refresh tokens database operations
+const refreshTokensDb = {
+  // Store a new refresh token
+  storeRefreshToken: (userId, token) => {
+    try {
+      const tokenHash = hashRefreshToken(token);
+      const expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000); // 30 days
+
+      const stmt = db.prepare(
+        'INSERT INTO refresh_tokens (user_id, token_hash, expires_at) VALUES (?, ?, ?)'
+      );
+      const result = stmt.run(userId, tokenHash, expiresAt.toISOString());
+      return { id: result.lastInsertRowid, tokenHash };
+    } catch (err) {
+      throw err;
+    }
+  },
+
+  // Validate a refresh token
+  validateRefreshToken: (token, userId) => {
+    try {
+      const tokenHash = hashRefreshToken(token);
+      let row = db.prepare(`
+        SELECT * FROM refresh_tokens
+        WHERE token_hash = ? AND user_id = ? AND is_revoked = 0
+        AND datetime(expires_at) > datetime('now')
+      `).get(tokenHash, userId);
+
+      if (!row) {
+        // Fallback: try legacy plain SHA-256 hash
+        const legacyHash = crypto.createHash('sha256').update(token).digest('hex');
+        row = db.prepare(`
+          SELECT * FROM refresh_tokens
+          WHERE token_hash = ? AND user_id = ? AND is_revoked = 0
+          AND datetime(expires_at) > datetime('now')
+        `).get(legacyHash, userId);
+
+        if (row) {
+          // Migrate to HMAC hash
+          db.prepare('UPDATE refresh_tokens SET token_hash = ? WHERE id = ?').run(tokenHash, row.id);
+          console.warn('[SECURITY] Migrated legacy SHA-256 refresh token to HMAC storage.');
+        }
+      }
+
+      return row !== undefined;
+    } catch (err) {
+      throw err;
+    }
+  },
+
+  // Revoke a refresh token
+  revokeRefreshToken: (token) => {
+    try {
+      const tokenHash = hashRefreshToken(token);
+      const stmt = db.prepare('UPDATE refresh_tokens SET is_revoked = 1 WHERE token_hash = ?');
+      let result = stmt.run(tokenHash);
+
+      if (result.changes === 0) {
+        // Fallback: try legacy plain SHA-256 hash
+        const legacyHash = crypto.createHash('sha256').update(token).digest('hex');
+        result = db.prepare('UPDATE refresh_tokens SET is_revoked = 1 WHERE token_hash = ?').run(legacyHash);
+      }
+
+      return result.changes > 0;
+    } catch (err) {
+      throw err;
+    }
+  },
+
+  // Revoke all refresh tokens for a user
+  revokeAllUserTokens: (userId) => {
+    try {
+      const stmt = db.prepare('UPDATE refresh_tokens SET is_revoked = 1 WHERE user_id = ?');
+      const result = stmt.run(userId);
+      return result.changes;
+    } catch (err) {
+      throw err;
+    }
+  },
+
+  // Check if a token exists but has been revoked (for reuse detection)
+  isTokenRevoked: (token, userId) => {
+    try {
+      const tokenHash = hashRefreshToken(token);
+      let row = db.prepare(`
+        SELECT * FROM refresh_tokens
+        WHERE token_hash = ? AND user_id = ? AND is_revoked = 1
+      `).get(tokenHash, userId);
+
+      if (!row) {
+        // Fallback: try legacy plain SHA-256 hash
+        const legacyHash = crypto.createHash('sha256').update(token).digest('hex');
+        row = db.prepare(`
+          SELECT * FROM refresh_tokens
+          WHERE token_hash = ? AND user_id = ? AND is_revoked = 1
+        `).get(legacyHash, userId);
+      }
+
+      return row !== undefined;
+    } catch (err) {
+      throw err;
+    }
+  },
+
+  // Clean up expired tokens (run periodically)
+  cleanupExpiredTokens: () => {
+    try {
+      const stmt = db.prepare("DELETE FROM refresh_tokens WHERE datetime(expires_at) < datetime('now')");
+      const result = stmt.run();
+      return result.changes;
     } catch (err) {
       throw err;
     }
@@ -357,5 +577,6 @@ export {
   userDb,
   apiKeysDb,
   credentialsDb,
+  refreshTokensDb,
   githubTokensDb // Backward compatibility
 };

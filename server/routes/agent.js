@@ -6,12 +6,14 @@ import { promises as fs } from 'fs';
 import crypto from 'crypto';
 import { userDb, apiKeysDb, githubTokensDb } from '../database/db.js';
 import { addProjectManually } from '../projects.js';
+import { validateWorkspacePath } from './projects.js';
 import { queryClaudeSDK } from '../claude-sdk.js';
 import { spawnCursor } from '../cursor-cli.js';
 import { queryCodex } from '../openai-codex.js';
 import { Octokit } from '@octokit/rest';
 import { CLAUDE_MODELS, CURSOR_MODELS, CODEX_MODELS } from '../../shared/modelConstants.js';
 import { IS_PLATFORM } from '../constants/config.js';
+import { getSanitizedEnv } from '../utils/env.js';
 
 const router = express.Router();
 
@@ -365,12 +367,15 @@ async function cloneGitHubRepo(githubUrl, githubToken = null, projectPath) {
       // Ensure parent directory exists
       await fs.mkdir(path.dirname(cloneDir), { recursive: true });
 
-      // Prepare the git clone URL with authentication if token is provided
-      let cloneUrl = githubUrl;
+      // Prepare the git clone with authentication via environment if token is provided
+      const cloneUrl = githubUrl;
+      const cloneEnv = getSanitizedEnv();
+
       if (githubToken) {
-        // Convert HTTPS URL to authenticated URL
-        // Example: https://github.com/user/repo -> https://token@github.com/user/repo
-        cloneUrl = githubUrl.replace('https://github.com', `https://${githubToken}@github.com`);
+        // Pass token via GIT_CONFIG environment variables to avoid leaking in process args
+        cloneEnv.GIT_CONFIG_COUNT = '1';
+        cloneEnv.GIT_CONFIG_KEY_0 = 'http.https://github.com/.extraheader';
+        cloneEnv.GIT_CONFIG_VALUE_0 = `AUTHORIZATION: basic ${Buffer.from(`x-access-token:${githubToken}`).toString('base64')}`;
       }
 
       console.log('🔄 Cloning repository:', githubUrl);
@@ -378,7 +383,8 @@ async function cloneGitHubRepo(githubUrl, githubToken = null, projectPath) {
 
       // Execute git clone
       const gitProcess = spawn('git', ['clone', '--depth', '1', cloneUrl, cloneDir], {
-        stdio: ['pipe', 'pipe', 'pipe']
+        stdio: ['pipe', 'pipe', 'pipe'],
+        env: cloneEnv
       });
 
       let stdout = '';
@@ -838,6 +844,20 @@ class ResponseCollector {
 router.post('/', validateExternalApiKey, async (req, res) => {
   const { githubUrl, projectPath, message, provider = 'claude', model, githubToken, branchName } = req.body;
 
+  // Validate and handle permission mode
+  // bypassPermissions is controlled server-side only via AGENT_BYPASS_PERMISSIONS env var
+  const ALLOWED_PERMISSION_MODES = ['default', 'plan'];
+  const requestedMode = req.body.permissionMode || 'default';
+
+  if (!ALLOWED_PERMISSION_MODES.includes(requestedMode)) {
+    return res.status(400).json({ error: `Invalid permission mode. Allowed: ${ALLOWED_PERMISSION_MODES.join(', ')}` });
+  }
+
+  const permissionMode = process.env.AGENT_BYPASS_PERMISSIONS === 'true' ? 'bypassPermissions' : requestedMode;
+  if (permissionMode === 'bypassPermissions') {
+    console.warn(`[SECURITY] Agent API running with bypassPermissions mode (server-configured)`);
+  }
+
   // Parse stream and cleanup as booleans (handle string "true"/"false" from curl)
   const stream = req.body.stream === undefined ? true : (req.body.stream === true || req.body.stream === 'true');
   const cleanup = req.body.cleanup === undefined ? true : (req.body.cleanup === true || req.body.cleanup === 'true');
@@ -887,6 +907,13 @@ router.post('/', validateExternalApiKey, async (req, res) => {
     } else {
       // Use existing project path
       finalProjectPath = path.resolve(projectPath);
+
+      // Validate workspace path safety
+      const pathValidation = await validateWorkspacePath(finalProjectPath);
+      if (!pathValidation.valid) {
+        throw new Error(`Invalid project path: ${pathValidation.error}`);
+      }
+      finalProjectPath = pathValidation.resolvedPath;
 
       // Verify the path exists
       try {
@@ -948,7 +975,7 @@ router.post('/', validateExternalApiKey, async (req, res) => {
         cwd: finalProjectPath,
         sessionId: null, // New session
         model: model,
-        permissionMode: 'bypassPermissions' // Bypass all permissions for API calls
+        permissionMode: permissionMode
       }, writer);
 
     } else if (provider === 'cursor') {
@@ -969,7 +996,7 @@ router.post('/', validateExternalApiKey, async (req, res) => {
         cwd: finalProjectPath,
         sessionId: null,
         model: model || CODEX_MODELS.DEFAULT,
-        permissionMode: 'bypassPermissions'
+        permissionMode: permissionMode
       }, writer);
     }
 

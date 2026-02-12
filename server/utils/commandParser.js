@@ -10,6 +10,8 @@ const execFileAsync = promisify(execFile);
 // Configuration
 const MAX_INCLUDE_DEPTH = 3;
 const BASH_TIMEOUT = 30000; // 30 seconds
+const MAX_ARG_LENGTH = 1000; // Maximum length for a single argument
+const MAX_COMMAND_LENGTH = 10000; // Maximum total command length
 const BASH_COMMAND_ALLOWLIST = [
   'echo',
   'ls',
@@ -78,14 +80,59 @@ export function replaceArguments(content, args) {
  * @returns {boolean} True if path is safe
  */
 export function isPathSafe(filePath, basePath) {
-  const resolvedPath = path.resolve(basePath, filePath);
-  const resolvedBase = path.resolve(basePath);
-  const relative = path.relative(resolvedBase, resolvedPath);
-  return (
-    relative !== '' &&
-    !relative.startsWith('..') &&
-    !path.isAbsolute(relative)
-  );
+  // NULL byte check
+  if (filePath.includes('\0') || basePath.includes('\0')) {
+    console.warn('[SECURITY] NULL byte detected in path');
+    return false;
+  }
+
+  // Check for dangerous path patterns
+  const dangerousPatterns = [
+    '../',     // Directory traversal
+    '..\\',    // Windows directory traversal
+    '~/',      // Home directory expansion
+    '~\\',     // Windows home directory
+  ];
+
+  for (const pattern of dangerousPatterns) {
+    if (filePath.includes(pattern)) {
+      console.warn(`[SECURITY] Dangerous path pattern detected: ${pattern}`);
+      return false;
+    }
+  }
+
+  try {
+    const resolvedPath = path.resolve(basePath, filePath);
+    const resolvedBase = path.resolve(basePath);
+    const relative = path.relative(resolvedBase, resolvedPath);
+
+    // Ensure base path ends with separator for prefix matching
+    // This prevents '/home/user' from matching '/home/user2/file'
+    const normalizedBase = resolvedBase.endsWith(path.sep)
+      ? resolvedBase
+      : resolvedBase + path.sep;
+
+    // Path must be:
+    // 1. Not empty (relative must point to something)
+    // 2. Not start with '..' (no parent directory access)
+    // 3. Not be absolute (must be relative to base)
+    // 4. Actually be within the base directory (strict prefix check with separator)
+    const isSafe = (
+      relative !== '' &&
+      !relative.startsWith('..') &&
+      !path.isAbsolute(relative) &&
+      (resolvedPath === resolvedBase || resolvedPath.startsWith(normalizedBase))
+    );
+
+    if (!isSafe) {
+      console.warn('[SECURITY] Path traversal attempt blocked:', filePath);
+    }
+
+    return isSafe;
+  } catch (error) {
+    console.error('[SECURITY] Path validation error:', error.message);
+    return false;
+  }
 }
 
 /**
@@ -153,6 +200,17 @@ export function validateCommand(commandString) {
     return { allowed: false, command: '', args: [], error: 'Empty command' };
   }
 
+  // Length validation
+  if (trimmedCommand.length > MAX_COMMAND_LENGTH) {
+    console.warn('[SECURITY] Command too long:', trimmedCommand.length, 'characters');
+    return {
+      allowed: false,
+      command: '',
+      args: [],
+      error: `Command too long (max ${MAX_COMMAND_LENGTH} characters)`
+    };
+  }
+
   // Parse the command using shell-quote to handle quotes properly
   const parsed = parseShellCommand(trimmedCommand);
 
@@ -186,6 +244,7 @@ export function validateCommand(commandString) {
   const isAllowed = BASH_COMMAND_ALLOWLIST.includes(commandName);
 
   if (!isAllowed) {
+    console.warn(`[SECURITY] Blocked non-allowlisted command: ${commandName}`);
     return {
       allowed: false,
       command: commandName,
@@ -194,18 +253,60 @@ export function validateCommand(commandString) {
     };
   }
 
-  // Validate arguments don't contain dangerous metacharacters
+  // Dangerous character detection
+  // Only block actual shell metacharacters that could enable command injection
   const dangerousPattern = /[;&|`$()<>{}[\]\\]/;
+
+  // Validate arguments
   for (const arg of args) {
-    if (dangerousPattern.test(arg)) {
+    // Length check
+    if (arg.length > MAX_ARG_LENGTH) {
+      console.warn(`[SECURITY] Argument too long:`, arg.substring(0, 50) + '...');
       return {
         allowed: false,
         command: commandName,
         args,
-        error: `Argument contains dangerous characters: ${arg}`
+        error: `Argument too long (max ${MAX_ARG_LENGTH} characters)`
+      };
+    }
+
+    // Dangerous character check
+    if (dangerousPattern.test(arg)) {
+      console.warn(`[SECURITY] Dangerous characters in argument:`, arg.substring(0, 50));
+      return {
+        allowed: false,
+        command: commandName,
+        args,
+        error: `Argument contains dangerous characters: ${arg.substring(0, 50)}${arg.length > 50 ? '...' : ''}`
+      };
+    }
+
+    // NULL byte check (potential security issue)
+    if (arg.includes('\0')) {
+      console.warn('[SECURITY] NULL byte detected in argument');
+      return {
+        allowed: false,
+        command: commandName,
+        args,
+        error: 'NULL bytes not allowed in arguments'
+      };
+    }
+
+    // Check for command injection attempts via Unicode tricks
+    // Some terminals interpret specific Unicode characters as control characters
+    if (/[\u0000-\u001F\u007F-\u009F]/.test(arg)) {
+      console.warn('[SECURITY] Control characters detected in argument');
+      return {
+        allowed: false,
+        command: commandName,
+        args,
+        error: 'Control characters not allowed in arguments'
       };
     }
   }
+
+  // Log successful validation (for audit trail)
+  console.log(`[AUDIT] Allowed command: ${commandName} with ${args.length} arg(s)`);
 
   return { allowed: true, command: commandName, args };
 }

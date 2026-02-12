@@ -36,6 +36,7 @@ import { WebSocketServer, WebSocket } from 'ws';
 import os from 'os';
 import http from 'http';
 import cors from 'cors';
+import helmet from 'helmet';
 import { promises as fsPromises } from 'fs';
 import { spawn } from 'child_process';
 import pty from 'node-pty';
@@ -59,9 +60,13 @@ import projectsRoutes, { WORKSPACES_ROOT, validateWorkspacePath } from './routes
 import cliAuthRoutes from './routes/cli-auth.js';
 import userRoutes from './routes/user.js';
 import codexRoutes from './routes/codex.js';
-import { initializeDatabase } from './database/db.js';
+import { initializeDatabase, refreshTokensDb } from './database/db.js';
 import { validateApiKey, authenticateToken, authenticateWebSocket } from './middleware/auth.js';
 import { IS_PLATFORM } from './constants/config.js';
+import { apiLimiter } from './middleware/rateLimiter.js';
+import { errorHandler, notFoundHandler } from './middleware/errorHandler.js';
+import { logger } from './utils/logger.js';
+import { getSanitizedEnv } from './utils/env.js';
 
 // File system watcher for projects folder
 let projectsWatcher = null;
@@ -174,6 +179,16 @@ async function setupProjectsWatcher() {
 
 
 const app = express();
+
+// Configure trust proxy for correct client IP detection behind reverse proxies
+// This affects req.ip, req.secure, and rate limiter behavior
+if (process.env.TRUST_PROXY) {
+  const trustProxy = process.env.TRUST_PROXY === 'true' ? true :
+                     /^\d+$/.test(process.env.TRUST_PROXY) ? parseInt(process.env.TRUST_PROXY) :
+                     process.env.TRUST_PROXY;
+  app.set('trust proxy', trustProxy);
+}
+
 const server = http.createServer(app);
 
 const ptySessionsMap = new Map();
@@ -248,28 +263,82 @@ const wss = new WebSocketServer({
     verifyClient: (info) => {
         console.log('WebSocket connection attempt to:', info.req.url);
 
-        // Platform mode: always allow connection
+        // Platform mode: Enhanced security validation
         if (IS_PLATFORM) {
-            const user = authenticateWebSocket(null); // Will return first user
+            // Use the actual TCP peer address, not spoofable headers
+            const peerAddress = info.req.connection.remoteAddress || info.req.socket.remoteAddress;
+
+            // Validate proxy identity headers
+            const proxyUserId = info.req.headers['x-proxy-user-id'];
+            const proxyUsername = info.req.headers['x-proxy-username'];
+
+            if (!proxyUserId || !proxyUsername) {
+                console.error('[SECURITY] Platform mode WebSocket: Missing proxy identity headers');
+                return false;
+            }
+
+            // Audit log
+            console.log(`[AUDIT] Platform mode WebSocket auth:`, {
+                userId: proxyUserId,
+                username: proxyUsername,
+                ip: peerAddress
+            });
+
+            // authenticateWebSocket handles trusted proxy validation internally
+            const user = authenticateWebSocket(null, peerAddress);
             if (!user) {
                 console.log('[WARN] Platform mode: No user found in database');
                 return false;
             }
-            info.req.user = user;
-            console.log('[OK] Platform mode WebSocket authenticated for user:', user.username);
+
+            // Attach enhanced user info
+            info.req.user = {
+                ...user,
+                platformUserId: proxyUserId,
+                platformUsername: proxyUsername
+            };
+
+            console.log('[OK] Platform mode WebSocket authenticated for user:', proxyUsername);
             return true;
         }
 
         // Normal mode: verify token
-        // Extract token from query parameters or headers
-        const url = new URL(info.req.url, 'http://localhost');
-        const token = url.searchParams.get('token') ||
-            info.req.headers.authorization?.split(' ')[1];
+        // Extract token from Sec-WebSocket-Protocol header (preferred) or Authorization header
+        let token = null;
+
+        // Method 1: WebSocket subprotocol (most secure - token not in URL)
+        const protocols = info.req.headers['sec-websocket-protocol'];
+        if (protocols) {
+            const protocolArray = protocols.split(',').map(p => p.trim());
+            // Look for protocol starting with "token."
+            const tokenProtocol = protocolArray.find(p => p.startsWith('token.'));
+            if (tokenProtocol) {
+                token = tokenProtocol.substring(6); // Remove "token." prefix
+                // Store the protocol name for handshake response
+                info.req.selectedProtocol = 'token';
+            }
+        }
+
+        // Method 2: Authorization header (fallback)
+        if (!token) {
+            const authHeader = info.req.headers.authorization;
+            if (authHeader && authHeader.startsWith('Bearer ')) {
+                token = authHeader.substring(7);
+            }
+        }
+
+        // Security: Do NOT accept token from URL query parameters
+        // This prevents tokens from appearing in server logs
+
+        if (!token) {
+            console.log('[WARN] WebSocket authentication failed: No token provided');
+            return false;
+        }
 
         // Verify token
         const user = authenticateWebSocket(token);
         if (!user) {
-            console.log('[WARN] WebSocket authentication failed');
+            console.log('[WARN] WebSocket authentication failed: Invalid token');
             return false;
         }
 
@@ -283,9 +352,179 @@ const wss = new WebSocketServer({
 // Make WebSocket server available to routes
 app.locals.wss = wss;
 
-app.use(cors());
+// HTTPS redirect in production
+if (process.env.NODE_ENV === 'production' && process.env.FORCE_HTTPS !== 'false') {
+  const appHost = process.env.APP_HOST;
+  if (!appHost) {
+    console.warn('[WARN] APP_HOST is not set. HTTPS redirect will use req.hostname which may be unsafe.');
+    console.warn('  Set APP_HOST in your .env file for production deployments.');
+  }
+  app.use((req, res, next) => {
+    // Check if request is already HTTPS (requires trust proxy to be set)
+    if (!req.secure) {
+      // Use configured host or fall back to req.hostname (which respects trust proxy)
+      const host = appHost || req.hostname;
+      return res.redirect(302, `https://${host}${req.url}`);
+    }
+    next();
+  });
+}
+
+// Helmet security headers
+app.use(helmet({
+  // Content Security Policy
+  contentSecurityPolicy: {
+    directives: {
+      defaultSrc: ["'self'"],
+      scriptSrc: ["'self'", "'unsafe-inline'"], // CodeMirror needs unsafe-inline
+      styleSrc: ["'self'", "'unsafe-inline'"],  // Tailwind needs unsafe-inline
+      imgSrc: ["'self'", 'data:', 'https:'],
+      connectSrc: ["'self'", 'ws:', 'wss:'],
+      fontSrc: ["'self'", 'data:'],
+      objectSrc: ["'none'"],
+      mediaSrc: ["'self'"],
+      frameSrc: ["'none'"],
+      childSrc: ["'none'"],
+      formAction: ["'self'"],
+      upgradeInsecureRequests: process.env.NODE_ENV === 'production' ? [] : null
+    }
+  },
+  // HTTP Strict Transport Security
+  hsts: {
+    maxAge: 31536000, // 1 year
+    includeSubDomains: true,
+    preload: true
+  },
+  // Referrer Policy
+  referrerPolicy: {
+    policy: 'strict-origin-when-cross-origin'
+  },
+  // X-Content-Type-Options
+  noSniff: true,
+  // X-Frame-Options
+  frameguard: {
+    action: 'deny'
+  },
+  // X-XSS-Protection is deprecated in modern browsers and can introduce
+  // vulnerabilities in older ones. Explicitly disable it.
+  xssFilter: false,
+  // Hide X-Powered-By
+  hidePoweredBy: true,
+  // X-DNS-Prefetch-Control
+  dnsPrefetchControl: {
+    allow: false
+  },
+  // X-Download-Options
+  ieNoOpen: true,
+  // X-Permitted-Cross-Domain-Policies
+  permittedCrossDomainPolicies: {
+    permittedPolicies: 'none'
+  }
+}));
+
+// Additional custom security headers
+app.use((req, res, next) => {
+  // Permissions Policy (formerly Feature Policy)
+  res.setHeader('Permissions-Policy', 'geolocation=(), microphone=(), camera=(), payment=()');
+
+  next();
+});
+
+// Configure CORS with security
+const allowedOrigins = process.env.ALLOWED_ORIGINS
+  ? process.env.ALLOWED_ORIGINS.split(',').map(o => o.trim())
+  : (process.env.NODE_ENV === 'production'
+      ? [] // Production: must explicitly configure
+      : ['http://localhost:5173', 'http://localhost:3001', 'http://127.0.0.1:5173', 'http://127.0.0.1:3001']); // Development defaults
+
+// Validate production configuration
+if (process.env.NODE_ENV === 'production' && allowedOrigins.length === 0 && !IS_PLATFORM) {
+  console.warn('');
+  console.warn('[WARN] ALLOWED_ORIGINS is not set in production mode.');
+  console.warn('   CORS will reject all cross-origin requests.');
+  console.warn('   Set the domains that are allowed to access this API:');
+  console.warn('   ALLOWED_ORIGINS=https://yourdomain.com,https://www.yourdomain.com');
+  console.warn('');
+}
+
+// Log CORS configuration
+console.log('');
+console.log(c.dim('═'.repeat(60)));
+console.log(`${c.info('[INFO]')} CORS Configuration:`);
+if (allowedOrigins.includes('*')) {
+  console.log(`       ${c.warn('⚠️  WARNING:')} Allowing ALL origins (*)`);
+  console.log(`       ${c.dim('This is NOT recommended for production!')}`);
+} else if (allowedOrigins.length > 0) {
+  console.log(`       ${c.ok('Allowed origins:')}`);
+  allowedOrigins.forEach(origin => {
+    console.log(`       ${c.dim('→')} ${origin}`);
+  });
+} else if (IS_PLATFORM) {
+  console.log(`       ${c.info('Platform mode:')} CORS handled by proxy`);
+}
+console.log(c.dim('═'.repeat(60)));
+console.log('');
+
+app.use(cors({
+  origin: (origin, callback) => {
+    // Allow requests with no origin (like mobile apps, curl, Postman)
+    if (!origin) return callback(null, true);
+
+    // Platform mode: allow all (handled by proxy)
+    if (IS_PLATFORM) return callback(null, true);
+
+    // Check if origin is in allowlist or wildcard
+    if (allowedOrigins.includes('*') || allowedOrigins.includes(origin)) {
+      callback(null, true);
+    } else {
+      console.warn(`${c.warn('[SECURITY]')} CORS blocked request from origin: ${origin}`);
+      callback(new Error('Not allowed by CORS'));
+    }
+  },
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Api-Key'],
+  exposedHeaders: ['X-Total-Count', 'X-Page-Number']
+}));
+
+// Request body size limits (reduced from 50MB for security)
+const DEFAULT_BODY_LIMIT = process.env.MAX_BODY_SIZE || '10mb';
+const FILE_UPLOAD_LIMIT = process.env.MAX_FILE_SIZE || '50mb';
+
+// Concurrent connections limit
+let activeConnections = 0;
+const MAX_CONCURRENT_CONNECTIONS = parseInt(process.env.MAX_CONNECTIONS) || 100;
+
+// Connection limiter middleware
+app.use((req, res, next) => {
+  if (activeConnections >= MAX_CONCURRENT_CONNECTIONS) {
+    console.warn(`[SECURITY] Max concurrent connections reached: ${activeConnections}`);
+    return res.status(503).json({
+      error: 'Service temporarily unavailable',
+      message: 'Too many concurrent connections. Please try again later.',
+      retryAfter: 10
+    });
+  }
+
+  activeConnections++;
+
+  // Decrement on response finish or close (use flag to prevent double-decrement)
+  let cleaned = false;
+  const cleanup = () => {
+    if (!cleaned) {
+      cleaned = true;
+      activeConnections--;
+    }
+  };
+
+  res.on('finish', cleanup);
+  res.on('close', cleanup);
+
+  next();
+});
+
 app.use(express.json({
-  limit: '50mb',
+  limit: DEFAULT_BODY_LIMIT,
   type: (req) => {
     // Skip multipart/form-data requests (for file uploads like images)
     const contentType = req.headers['content-type'] || '';
@@ -295,15 +534,18 @@ app.use(express.json({
     return contentType.includes('json');
   }
 }));
-app.use(express.urlencoded({ limit: '50mb', extended: true }));
+app.use(express.urlencoded({ limit: DEFAULT_BODY_LIMIT, extended: true }));
 
-// Public health check endpoint (no authentication required)
+// Public health check endpoint (no authentication required, no rate limit)
 app.get('/health', (req, res) => {
   res.json({
     status: 'ok',
     timestamp: new Date().toISOString()
   });
 });
+
+// Apply rate limiting to all API endpoints
+app.use('/api', apiLimiter);
 
 // Optional API key validation (if configured)
 app.use('/api', validateApiKey);
@@ -378,12 +620,25 @@ app.post('/api/system/update', authenticateToken, async (req, res) => {
 
         console.log('Starting system update from directory:', projectRoot);
 
+        // Verify git remote points to expected repository
+        try {
+          const { execFileSync } = await import('child_process');
+          const remoteUrl = execFileSync('git', ['remote', 'get-url', 'origin'], { cwd: projectRoot, encoding: 'utf-8' }).trim();
+          // Only allow GitHub URLs (HTTPS or SSH)
+          if (!/^(https:\/\/github\.com\/|git@github\.com:)/.test(remoteUrl)) {
+            return res.status(400).json({ error: 'Update only supported for GitHub-hosted repositories' });
+          }
+        } catch (e) {
+          console.error('Failed to verify git remote:', e);
+          return res.status(400).json({ error: 'Failed to verify git remote' });
+        }
+
         // Run the update command
         const updateCommand = 'git checkout main && git pull && npm install';
 
         const child = spawn('sh', ['-c', updateCommand], {
             cwd: projectRoot,
-            env: process.env
+            env: getSanitizedEnv()
         });
 
         let output = '';
@@ -847,6 +1102,10 @@ wss.on('connection', (ws, request) => {
     const url = request.url;
     console.log('[INFO] Client connected to:', url);
 
+    // Note: WebSocket protocol is read-only and set during handshake
+    // The selected protocol can be accessed via ws.protocol (getter only)
+    // No need to set it here as it's already determined by the handshake
+
     // Parse URL to get pathname without query parameters
     const urlObj = new URL(url, 'http://localhost');
     const pathname = urlObj.pathname;
@@ -1033,19 +1292,58 @@ function handleShellConnection(ws) {
 
             if (data.type === 'init') {
                 const projectPath = data.projectPath || process.cwd();
+                // Validate projectPath - check both existence and workspace containment
+                const resolvedProjectPath = path.resolve(projectPath);
+                try {
+                  await fsPromises.access(resolvedProjectPath);
+                } catch {
+                  ws.send(JSON.stringify({ type: 'error', data: 'Invalid project path' }));
+                  return;
+                }
+                // Security: ensure path is within allowed workspace
+                const pathValidation = await validateWorkspacePath(resolvedProjectPath);
+                if (!pathValidation.valid) {
+                  ws.send(JSON.stringify({ type: 'error', data: `Path not allowed: ${pathValidation.error}` }));
+                  return;
+                }
                 const sessionId = data.sessionId;
+                if (sessionId && !/^[a-zA-Z0-9_-]{1,128}$/.test(sessionId)) {
+                  ws.send(JSON.stringify({ type: 'error', data: 'Invalid session ID format' }));
+                  return;
+                }
                 const hasSession = data.hasSession;
                 const provider = data.provider || 'claude';
-                const initialCommand = data.initialCommand;
+                const rawInitialCommand = data.initialCommand;
+
+                // Allowlist of permitted initial commands to prevent command injection
+                const ALLOWED_INITIAL_COMMANDS = [
+                    /^claude\s+--setup-token\s+\S+$/,
+                    /^cursor-agent\s+login$/,
+                    /^claude\s+auth\s+login$/,
+                    /^claude$/,
+                ];
+
+                let initialCommand = null;
+                if (rawInitialCommand) {
+                  const trimmed = rawInitialCommand.trim();
+                  if (ALLOWED_INITIAL_COMMANDS.some(re => re.test(trimmed))) {
+                    initialCommand = trimmed;
+                  } else {
+                    console.warn('[SECURITY] Rejected disallowed initialCommand:', trimmed.slice(0, 100));
+                    ws.send(JSON.stringify({ type: 'error', data: 'Initial command not allowed' }));
+                    return;
+                  }
+                }
+
                 const isPlainShell = data.isPlainShell || (!!initialCommand && !hasSession) || provider === 'plain-shell';
                 urlDetectionBuffer = '';
                 announcedAuthUrls.clear();
 
                 // Login commands (Claude/Cursor auth) should never reuse cached sessions
                 const isLoginCommand = initialCommand && (
-                    initialCommand.includes('setup-token') ||
-                    initialCommand.includes('cursor-agent login') ||
-                    initialCommand.includes('auth login')
+                    /^claude\s+--setup-token\s/.test(initialCommand) ||
+                    initialCommand === 'cursor-agent login' ||
+                    initialCommand === 'claude auth login'
                 );
 
                 // Include command hash in session key so different commands get separate sessions
@@ -1116,72 +1414,68 @@ function handleShellConnection(ws) {
                 }));
 
                 try {
-                    // Prepare the shell command adapted to the platform and provider
-                    let shellCommand;
+                    // Build command and args for pty.spawn (no shell needed)
+                    let spawnCmd;
+                    let spawnArgs;
+
                     if (isPlainShell) {
-                        // Plain shell mode - just run the initial command in the project directory
-                        if (os.platform() === 'win32') {
-                            shellCommand = `Set-Location -Path "${projectPath}"; ${initialCommand}`;
-                        } else {
-                            shellCommand = `cd "${projectPath}" && ${initialCommand}`;
-                        }
+                      if (os.platform() === 'win32') {
+                        spawnCmd = 'powershell.exe';
+                        spawnArgs = [];
+                      } else {
+                        spawnCmd = process.env.SHELL || 'bash';
+                        spawnArgs = [];
+                      }
                     } else if (provider === 'cursor') {
-                        // Use cursor-agent command
-                        if (os.platform() === 'win32') {
-                            if (hasSession && sessionId) {
-                                shellCommand = `Set-Location -Path "${projectPath}"; cursor-agent --resume="${sessionId}"`;
-                            } else {
-                                shellCommand = `Set-Location -Path "${projectPath}"; cursor-agent`;
-                            }
-                        } else {
-                            if (hasSession && sessionId) {
-                                shellCommand = `cd "${projectPath}" && cursor-agent --resume="${sessionId}"`;
-                            } else {
-                                shellCommand = `cd "${projectPath}" && cursor-agent`;
-                            }
-                        }
+                      spawnCmd = 'cursor-agent';
+                      spawnArgs = [];
+                      if (hasSession && sessionId) {
+                        spawnArgs.push('--resume=' + sessionId);
+                      }
                     } else {
-                        // Use claude command (default) or initialCommand if provided
-                        const command = initialCommand || 'claude';
+                      // Claude provider (default)
+                      if (initialCommand && !hasSession) {
+                        // Custom initial command (non-shell mode should not allow arbitrary commands)
+                        // Use bash for the specific command
                         if (os.platform() === 'win32') {
-                            if (hasSession && sessionId) {
-                                // Try to resume session, but with fallback to new session if it fails
-                                shellCommand = `Set-Location -Path "${projectPath}"; claude --resume ${sessionId}; if ($LASTEXITCODE -ne 0) { claude }`;
-                            } else {
-                                shellCommand = `Set-Location -Path "${projectPath}"; ${command}`;
-                            }
+                          spawnCmd = 'powershell.exe';
+                          spawnArgs = [];
                         } else {
-                            if (hasSession && sessionId) {
-                                shellCommand = `cd "${projectPath}" && claude --resume ${sessionId} || claude`;
-                            } else {
-                                shellCommand = `cd "${projectPath}" && ${command}`;
-                            }
+                          spawnCmd = process.env.SHELL || 'bash';
+                          spawnArgs = [];
                         }
+                      } else {
+                        spawnCmd = 'claude';
+                        spawnArgs = [];
+                        if (hasSession && sessionId) {
+                          spawnArgs.push('--resume', sessionId);
+                        }
+                      }
                     }
 
-                    console.log('🔧 Executing shell command:', shellCommand);
-
-                    // Use appropriate shell based on platform
-                    const shell = os.platform() === 'win32' ? 'powershell.exe' : 'bash';
-                    const shellArgs = os.platform() === 'win32' ? ['-Command', shellCommand] : ['-c', shellCommand];
+                    console.log('🔧 Spawning command:', spawnCmd, spawnArgs);
 
                     // Use terminal dimensions from client if provided, otherwise use defaults
                     const termCols = data.cols || 80;
                     const termRows = data.rows || 24;
                     console.log('📐 Using terminal dimensions:', termCols, 'x', termRows);
 
-                    shellProcess = pty.spawn(shell, shellArgs, {
+                    shellProcess = pty.spawn(spawnCmd, spawnArgs, {
                         name: 'xterm-256color',
                         cols: termCols,
                         rows: termRows,
-                        cwd: os.homedir(),
-                        env: {
-                            ...process.env,
-                            TERM: 'xterm-256color',
-                            COLORTERM: 'truecolor',
-                            FORCE_COLOR: '3'
-                        }
+                        cwd: resolvedProjectPath,
+                        env: getSanitizedEnv()
                     });
+
+                    // If plain shell with an initialCommand, send it via stdin instead of embedding in shell args
+                    if (isPlainShell && initialCommand) {
+                      setTimeout(() => {
+                        if (shellProcess) {
+                          shellProcess.write(initialCommand + '\n');
+                        }
+                      }, 500);
+                    }
 
                     console.log('🟢 Shell process started with PTY, PID:', shellProcess.pid);
 
@@ -1856,6 +2150,31 @@ async function getFileTree(dirPath, maxDepth = 3, currentDepth = 0, showHidden =
     });
 }
 
+// Error Handling Middleware
+// Must be added after all routes
+app.use(notFoundHandler);
+app.use(errorHandler);
+
+// Global error handlers for uncaught exceptions
+process.on('uncaughtException', (error) => {
+    logger.error('Uncaught Exception', error, {
+        type: 'uncaughtException'
+    });
+    console.error('[FATAL] Uncaught Exception:', error);
+    // Give time for logs to write before exiting
+    setTimeout(() => {
+        process.exit(1);
+    }, 1000);
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+    logger.error('Unhandled Promise Rejection', reason instanceof Error ? reason : new Error(String(reason)), {
+        type: 'unhandledRejection',
+        promise: String(promise)
+    });
+    console.error('[ERROR] Unhandled Promise Rejection:', reason);
+});
+
 const PORT = process.env.PORT || 3001;
 
 // Initialize database and start server
@@ -1863,6 +2182,18 @@ async function startServer() {
     try {
         // Initialize authentication database
         await initializeDatabase();
+
+        // Schedule periodic cleanup of expired refresh tokens (every 6 hours)
+        setInterval(() => {
+          try {
+            const cleaned = refreshTokensDb.cleanupExpiredTokens();
+            if (cleaned > 0) {
+              console.log(`[INFO] Cleaned up ${cleaned} expired refresh tokens`);
+            }
+          } catch (e) {
+            console.error('[ERROR] Failed to cleanup expired tokens:', e.message);
+          }
+        }, 6 * 60 * 60 * 1000);
 
         // Check if running in production mode (dist folder exists)
         const distIndexPath = path.join(__dirname, '../dist/index.html');
@@ -1876,7 +2207,8 @@ async function startServer() {
             console.log(`${c.warn('[WARN]')} Note: Requests will be proxied to Vite dev server at ${c.dim('http://localhost:' + (process.env.VITE_PORT || 5173))}`);
         }
 
-        server.listen(PORT, '0.0.0.0', async () => {
+        const BIND_ADDRESS = process.env.BIND_ADDRESS || '0.0.0.0';
+        server.listen(PORT, BIND_ADDRESS, async () => {
             const appInstallPath = path.join(__dirname, '..');
 
             console.log('');
@@ -1884,7 +2216,7 @@ async function startServer() {
             console.log(`  ${c.bright('Claude Code UI Server - Ready')}`);
             console.log(c.dim('═'.repeat(63)));
             console.log('');
-            console.log(`${c.info('[INFO]')} Server URL:  ${c.bright('http://0.0.0.0:' + PORT)}`);
+            console.log(`${c.info('[INFO]')} Server URL:  ${c.bright('http://' + BIND_ADDRESS + ':' + PORT)}`);
             console.log(`${c.info('[INFO]')} Installed at: ${c.dim(appInstallPath)}`);
             console.log(`${c.tip('[TIP]')}  Run "cloudcli status" for full configuration details`);
             console.log('');

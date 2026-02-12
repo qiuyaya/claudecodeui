@@ -127,49 +127,81 @@ const ProjectCreationWizard = ({ onClose, onProjectCreated }) => {
 
     try {
       if (workspaceType === 'new' && githubUrl) {
-        const params = new URLSearchParams({
+        const body = {
           path: workspacePath.trim(),
           githubUrl: githubUrl.trim(),
-        });
+        };
 
         if (tokenMode === 'stored' && selectedGithubToken) {
-          params.append('githubTokenId', selectedGithubToken);
+          body.githubTokenId = selectedGithubToken;
         } else if (tokenMode === 'new' && newGithubToken) {
-          params.append('newGithubToken', newGithubToken.trim());
+          body.newGithubToken = newGithubToken.trim();
         }
 
         const token = localStorage.getItem('auth-token');
-        const url = `/api/projects/clone-progress?${params}${token ? `&token=${token}` : ''}`;
+        const url = `/api/projects/clone-progress`;
+        const controller = new AbortController();
 
         await new Promise((resolve, reject) => {
-          const eventSource = new EventSource(url);
+          fetch(url, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              ...(token ? { 'Authorization': `Bearer ${token}` } : {}),
+            },
+            body: JSON.stringify(body),
+            signal: controller.signal
+          }).then(response => {
+            if (!response.ok) throw new Error(`HTTP ${response.status}`);
+            const reader = response.body.getReader();
+            const decoder = new TextDecoder();
+            let buffer = '';
 
-          eventSource.onmessage = (event) => {
-            try {
-              const data = JSON.parse(event.data);
-
-              if (data.type === 'progress') {
-                setCloneProgress(data.message);
-              } else if (data.type === 'complete') {
-                eventSource.close();
-                if (onProjectCreated) {
-                  onProjectCreated(data.project);
+            function processStream() {
+              reader.read().then(({ done, value }) => {
+                if (done) {
+                  resolve();
+                  return;
                 }
-                onClose();
-                resolve();
-              } else if (data.type === 'error') {
-                eventSource.close();
-                reject(new Error(data.message));
-              }
-            } catch (e) {
-              console.error('Error parsing SSE event:', e);
-            }
-          };
+                buffer += decoder.decode(value, { stream: true });
+                const lines = buffer.split('\n');
+                buffer = lines.pop() || '';
 
-          eventSource.onerror = () => {
-            eventSource.close();
-            reject(new Error('Connection lost during clone'));
-          };
+                for (const line of lines) {
+                  if (line.startsWith('data: ')) {
+                    try {
+                      const data = JSON.parse(line.slice(6));
+                      if (data.type === 'progress') {
+                        setCloneProgress(data.message);
+                      } else if (data.type === 'complete') {
+                        if (onProjectCreated) {
+                          onProjectCreated(data.project);
+                        }
+                        onClose();
+                        reader.cancel();
+                        resolve();
+                        return;
+                      } else if (data.type === 'error') {
+                        reader.cancel();
+                        reject(new Error(data.message));
+                        return;
+                      }
+                    } catch (e) {
+                      // ignore SSE parse errors
+                    }
+                  }
+                }
+                processStream();
+              }).catch(err => {
+                if (err.name === 'AbortError') return resolve();
+                reject(err);
+              });
+            }
+            processStream();
+          }).catch(err => {
+            if (err.name === 'AbortError') return resolve();
+            reject(err);
+          });
         });
         return;
       }

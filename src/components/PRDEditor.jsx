@@ -6,6 +6,7 @@ import { EditorView } from '@codemirror/view';
 import { X, Save, Download, Maximize2, Minimize2, Eye, FileText, Sparkles, AlertTriangle } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { api, authenticatedFetch } from '../utils/api';
+import DOMPurify from 'dompurify';
 
 const PRDEditor = ({ 
   file, 
@@ -693,7 +694,7 @@ This document outlines the requirements for building an AI-powered task manageme
             <div className="h-full overflow-y-auto p-6 prose prose-gray dark:prose-invert max-w-none">
               <div 
                 className="markdown-preview"
-                dangerouslySetInnerHTML={{ __html: renderMarkdown(content) }}
+                dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(renderMarkdown(content)) }}
               />
             </div>
           ) : (

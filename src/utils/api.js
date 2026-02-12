@@ -1,7 +1,53 @@
 import { IS_PLATFORM } from "../constants/config";
 
-// Utility function for authenticated API calls
-export const authenticatedFetch = (url, options = {}) => {
+// Token refresh state
+let isRefreshing = false;
+let refreshSubscribers = [];
+
+// Subscribe to token refresh completion
+const subscribeTokenRefresh = (callback) => {
+  refreshSubscribers.push(callback);
+};
+
+// Notify all subscribers when token is refreshed
+const onTokenRefreshed = (token) => {
+  refreshSubscribers.forEach(callback => callback(token));
+  refreshSubscribers = [];
+};
+
+// Notify all subscribers that refresh failed
+const onTokenRefreshFailed = () => {
+  refreshSubscribers.forEach(callback => callback(null));
+  refreshSubscribers = [];
+};
+
+// Refresh access token using refresh token
+const refreshAccessToken = async () => {
+  const refreshToken = localStorage.getItem('refresh-token');
+
+  if (!refreshToken) {
+    throw new Error('No refresh token available');
+  }
+
+  const response = await fetch('/api/auth/refresh', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ refreshToken })
+  });
+
+  if (!response.ok) {
+    throw new Error('Token refresh failed');
+  }
+
+  const data = await response.json();
+  if (data.refreshToken) {
+    localStorage.setItem('refresh-token', data.refreshToken);
+  }
+  return data.accessToken;
+};
+
+// Utility function for authenticated API calls with automatic token refresh
+export const authenticatedFetch = async (url, options = {}) => {
   const token = localStorage.getItem('auth-token');
 
   const defaultHeaders = {};
@@ -15,13 +61,80 @@ export const authenticatedFetch = (url, options = {}) => {
     defaultHeaders['Authorization'] = `Bearer ${token}`;
   }
 
-  return fetch(url, {
+  let response = await fetch(url, {
     ...options,
     headers: {
       ...defaultHeaders,
       ...options.headers,
     },
   });
+
+  // Handle token expiration
+  if (response.status === 401 && !IS_PLATFORM) {
+    try {
+      const errorData = await response.clone().json();
+
+      // Check if it's a token expiration error
+      if (errorData.code === 'TOKEN_EXPIRED') {
+        if (!isRefreshing) {
+          isRefreshing = true;
+
+          try {
+            // Refresh the token
+            const newToken = await refreshAccessToken();
+            localStorage.setItem('auth-token', newToken);
+            isRefreshing = false;
+            onTokenRefreshed(newToken);
+
+            // Retry the original request with new token
+            defaultHeaders['Authorization'] = `Bearer ${newToken}`;
+            response = await fetch(url, {
+              ...options,
+              headers: {
+                ...defaultHeaders,
+                ...options.headers,
+              },
+            });
+          } catch (error) {
+            isRefreshing = false;
+            onTokenRefreshFailed();
+            // Refresh failed, clear tokens and let AuthContext handle redirect
+            localStorage.removeItem('auth-token');
+            localStorage.removeItem('refresh-token');
+            window.dispatchEvent(new Event('auth-token-expired'));
+            throw error;
+          }
+        } else {
+          // Wait for the ongoing refresh to complete
+          const newToken = await new Promise((resolve) => {
+            subscribeTokenRefresh(resolve);
+          });
+
+          // If refresh failed, return original response
+          if (!newToken) {
+            return response;
+          }
+
+          // Retry with new token
+          defaultHeaders['Authorization'] = `Bearer ${newToken}`;
+          response = await fetch(url, {
+            ...options,
+            headers: {
+              ...defaultHeaders,
+              ...options.headers,
+            },
+          });
+        }
+      }
+    } catch (error) {
+      // If we can't parse the error or it's not a token error, just return the original response
+      if (error.message !== 'Token refresh failed') {
+        return response;
+      }
+    }
+  }
+
+  return response;
 };
 
 // API endpoints
@@ -40,7 +153,18 @@ export const api = {
       body: JSON.stringify({ username, password }),
     }),
     user: () => authenticatedFetch('/api/auth/user'),
-    logout: () => authenticatedFetch('/api/auth/logout', { method: 'POST' }),
+    logout: () => {
+      const refreshToken = localStorage.getItem('refresh-token');
+      return authenticatedFetch('/api/auth/logout', {
+        method: 'POST',
+        body: JSON.stringify({ refreshToken }),
+      });
+    },
+    refresh: (refreshToken) => fetch('/api/auth/refresh', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ refreshToken }),
+    }),
   },
 
   // Protected endpoints

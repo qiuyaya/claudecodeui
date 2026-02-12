@@ -1,7 +1,7 @@
-import { exec } from 'child_process';
+import { execFile } from 'child_process';
 import { promisify } from 'util';
 
-const execAsync = promisify(exec);
+const execFileAsync = promisify(execFile);
 
 /**
  * Read git configuration from system's global git config
@@ -10,8 +10,8 @@ const execAsync = promisify(exec);
 export async function getSystemGitConfig() {
   try {
     const [nameResult, emailResult] = await Promise.all([
-      execAsync('git config --global user.name').catch(() => ({ stdout: '' })),
-      execAsync('git config --global user.email').catch(() => ({ stdout: '' }))
+      execFileAsync('git', ['config', '--global', 'user.name']).catch(() => ({ stdout: '' })),
+      execFileAsync('git', ['config', '--global', 'user.email']).catch(() => ({ stdout: '' }))
     ]);
 
     return {

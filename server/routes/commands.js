@@ -385,8 +385,12 @@ router.post('/load', async (req, res) => {
 
     // Security: Prevent path traversal
     const resolvedPath = path.resolve(commandPath);
-    if (!resolvedPath.startsWith(path.resolve(os.homedir())) &&
-        !resolvedPath.includes('.claude/commands')) {
+    const userCommandsBase = path.resolve(path.join(os.homedir(), '.claude', 'commands'));
+
+    // Check if the resolved path is within user's .claude/commands directory
+    const isWithinUserCommands = resolvedPath.startsWith(userCommandsBase + path.sep) || resolvedPath === userCommandsBase;
+
+    if (!isWithinUserCommands) {
       return res.status(403).json({
         error: 'Access denied',
         message: 'Command must be in .claude/commands directory'
@@ -394,7 +398,7 @@ router.post('/load', async (req, res) => {
     }
 
     // Read and parse the command file
-    const content = await fs.readFile(commandPath, 'utf8');
+    const content = await fs.readFile(resolvedPath, 'utf8');
     const { data: metadata, content: commandContent } = matter(content);
 
     res.json({
