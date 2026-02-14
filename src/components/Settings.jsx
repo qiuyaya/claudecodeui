@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
 import { Badge } from './ui/badge';
@@ -507,28 +507,12 @@ function Settings({ isOpen, onClose, projects = [], initialTab = 'agents' }) {
   // Persist code editor settings to localStorage
   useEffect(() => {
     localStorage.setItem('codeEditorTheme', codeEditorTheme);
-    window.dispatchEvent(new Event('codeEditorSettingsChanged'));
-  }, [codeEditorTheme]);
-
-  useEffect(() => {
     localStorage.setItem('codeEditorWordWrap', codeEditorWordWrap.toString());
-    window.dispatchEvent(new Event('codeEditorSettingsChanged'));
-  }, [codeEditorWordWrap]);
-
-  useEffect(() => {
     localStorage.setItem('codeEditorShowMinimap', codeEditorShowMinimap.toString());
-    window.dispatchEvent(new Event('codeEditorSettingsChanged'));
-  }, [codeEditorShowMinimap]);
-
-  useEffect(() => {
     localStorage.setItem('codeEditorLineNumbers', codeEditorLineNumbers.toString());
-    window.dispatchEvent(new Event('codeEditorSettingsChanged'));
-  }, [codeEditorLineNumbers]);
-
-  useEffect(() => {
     localStorage.setItem('codeEditorFontSize', codeEditorFontSize);
     window.dispatchEvent(new Event('codeEditorSettingsChanged'));
-  }, [codeEditorFontSize]);
+  }, [codeEditorTheme, codeEditorWordWrap, codeEditorShowMinimap, codeEditorLineNumbers, codeEditorFontSize]);
 
   const loadSettings = async () => {
     try {
@@ -763,30 +747,30 @@ function Settings({ isOpen, onClose, projects = [], initialTab = 'agents' }) {
     }
   };
 
-  const addAllowedTool = (tool) => {
+  const addAllowedTool = useCallback((tool) => {
     if (tool && !allowedTools.includes(tool)) {
-      setAllowedTools([...allowedTools, tool]);
+      setAllowedTools(prev => [...prev, tool]);
       setNewAllowedTool('');
     }
-  };
+  }, [allowedTools]);
 
-  const removeAllowedTool = (tool) => {
-    setAllowedTools(allowedTools.filter(t => t !== tool));
-  };
+  const removeAllowedTool = useCallback((tool) => {
+    setAllowedTools(prev => prev.filter(t => t !== tool));
+  }, []);
 
-  const addDisallowedTool = (tool) => {
+  const addDisallowedTool = useCallback((tool) => {
     if (tool && !disallowedTools.includes(tool)) {
-      setDisallowedTools([...disallowedTools, tool]);
+      setDisallowedTools(prev => [...prev, tool]);
       setNewDisallowedTool('');
     }
-  };
+  }, [disallowedTools]);
 
-  const removeDisallowedTool = (tool) => {
-    setDisallowedTools(disallowedTools.filter(t => t !== tool));
-  };
+  const removeDisallowedTool = useCallback((tool) => {
+    setDisallowedTools(prev => prev.filter(t => t !== tool));
+  }, []);
 
   // MCP form handling functions
-  const resetMcpForm = () => {
+  const resetMcpForm = useCallback(() => {
     setMcpFormData({
       name: '',
       type: 'stdio',
@@ -806,9 +790,9 @@ function Settings({ isOpen, onClose, projects = [], initialTab = 'agents' }) {
     setEditingMcpServer(null);
     setShowMcpForm(false);
     setJsonValidationError('');
-  };
+  }, []);
 
-  const openMcpForm = (server = null) => {
+  const openMcpForm = useCallback((server = null) => {
     if (server) {
       setEditingMcpServer(server);
       setMcpFormData({
@@ -825,9 +809,9 @@ function Settings({ isOpen, onClose, projects = [], initialTab = 'agents' }) {
       resetMcpForm();
     }
     setShowMcpForm(true);
-  };
+  }, [resetMcpForm]);
 
-  const handleMcpSubmit = async (e) => {
+  const handleMcpSubmit = useCallback(async (e) => {
     e.preventDefault();
     
     setMcpLoading(true);
@@ -870,9 +854,9 @@ function Settings({ isOpen, onClose, projects = [], initialTab = 'agents' }) {
     } finally {
       setMcpLoading(false);
     }
-  };
+  }, [mcpFormData, resetMcpForm]);
 
-  const handleMcpDelete = async (serverId, scope) => {
+  const handleMcpDelete = useCallback(async (serverId, scope) => {
     if (confirm('Are you sure you want to delete this MCP server?')) {
       try {
         await deleteMcpServer(serverId, scope);
@@ -882,46 +866,46 @@ function Settings({ isOpen, onClose, projects = [], initialTab = 'agents' }) {
         setSaveStatus('error');
       }
     }
-  };
+  }, []);
 
-  const handleMcpTest = async (serverId, scope) => {
+  const handleMcpTest = useCallback(async (serverId, scope) => {
     try {
-      setMcpTestResults({ ...mcpTestResults, [serverId]: { loading: true } });
+      setMcpTestResults(prev => ({ ...prev, [serverId]: { loading: true } }));
       const result = await testMcpServer(serverId, scope);
-      setMcpTestResults({ ...mcpTestResults, [serverId]: result });
+      setMcpTestResults(prev => ({ ...prev, [serverId]: result }));
     } catch (error) {
-      setMcpTestResults({ 
-        ...mcpTestResults, 
-        [serverId]: { 
-          success: false, 
+      setMcpTestResults(prev => ({
+        ...prev,
+        [serverId]: {
+          success: false,
           message: error.message,
           details: []
-        } 
-      });
+        }
+      }));
     }
-  };
+  }, []);
 
-  const handleMcpToolsDiscovery = async (serverId, scope) => {
+  const handleMcpToolsDiscovery = useCallback(async (serverId, scope) => {
     try {
-      setMcpToolsLoading({ ...mcpToolsLoading, [serverId]: true });
+      setMcpToolsLoading(prev => ({ ...prev, [serverId]: true }));
       const result = await discoverMcpTools(serverId, scope);
-      setMcpServerTools({ ...mcpServerTools, [serverId]: result });
+      setMcpServerTools(prev => ({ ...prev, [serverId]: result }));
     } catch (error) {
-      setMcpServerTools({ 
-        ...mcpServerTools, 
-        [serverId]: { 
-          success: false, 
-          tools: [], 
-          resources: [], 
-          prompts: [] 
-        } 
-      });
+      setMcpServerTools(prev => ({
+        ...prev,
+        [serverId]: {
+          success: false,
+          tools: [],
+          resources: [],
+          prompts: []
+        }
+      }));
     } finally {
-      setMcpToolsLoading({ ...mcpToolsLoading, [serverId]: false });
+      setMcpToolsLoading(prev => ({ ...prev, [serverId]: false }));
     }
-  };
+  }, []);
 
-  const updateMcpConfig = (key, value) => {
+  const updateMcpConfig = useCallback((key, value) => {
     setMcpFormData(prev => ({
       ...prev,
       config: {
@@ -929,7 +913,7 @@ function Settings({ isOpen, onClose, projects = [], initialTab = 'agents' }) {
         [key]: value
       }
     }));
-  };
+  }, []);
 
 
   const getTransportIcon = (type) => {
@@ -1026,8 +1010,6 @@ function Settings({ isOpen, onClose, projects = [], initialTab = 'agents' }) {
             
             {/* Appearance Tab */}
             {activeTab === 'appearance' && (
-              <div className="space-y-6 md:space-y-8">
-               {activeTab === 'appearance' && (
   <div className="space-y-6 md:space-y-8">
     {/* Theme Settings */}
     <div className="space-y-4">
@@ -1247,9 +1229,6 @@ function Settings({ isOpen, onClose, projects = [], initialTab = 'agents' }) {
     </div>
   </div>
 )}
-
-              </div>
-            )}
 
             {/* Git Tab */}
             {activeTab === 'git' && <GitSettings />}

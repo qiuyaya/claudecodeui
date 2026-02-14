@@ -78,7 +78,11 @@ export const ThemeProvider = ({ children }) => {
   }, []);
 
   const toggleDarkMode = () => {
+    document.documentElement.classList.add('theme-transitioning');
     setIsDarkMode(prev => !prev);
+    setTimeout(() => {
+      document.documentElement.classList.remove('theme-transitioning');
+    }, 250);
   };
 
   const value = {

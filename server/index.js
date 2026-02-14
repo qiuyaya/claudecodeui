@@ -40,7 +40,6 @@ import helmet from 'helmet';
 import { promises as fsPromises } from 'fs';
 import { spawn } from 'child_process';
 import pty from 'node-pty';
-import fetch from 'node-fetch';
 import mime from 'mime-types';
 
 import { getProjects, getSessions, getSessionMessages, renameProject, deleteSession, deleteProject, addProjectManually, extractProjectDirectory, clearProjectDirectoryCache } from './projects.js';
@@ -70,6 +69,7 @@ import { getSanitizedEnv } from './utils/env.js';
 
 // File system watcher for projects folder
 let projectsWatcher = null;
+let debounceTimer = null;
 const connectedClients = new Set();
 let isGetProjectsRunning = false; // Flag to prevent reentrant calls
 
@@ -92,6 +92,7 @@ async function setupProjectsWatcher() {
     const claudeProjectsPath = path.join(os.homedir(), '.claude', 'projects');
 
     if (projectsWatcher) {
+        clearTimeout(debounceTimer);
         projectsWatcher.close();
     }
 
@@ -118,7 +119,6 @@ async function setupProjectsWatcher() {
         });
 
         // Debounce function to prevent excessive notifications
-        let debounceTimer;
         const debouncedUpdate = async (eventType, filePath) => {
             clearTimeout(debounceTimer);
             debounceTimer = setTimeout(async () => {
@@ -1616,6 +1616,7 @@ function handleShellConnection(ws) {
                 console.log('⏳ PTY session kept alive, will timeout in 30 minutes:', ptySessionKey);
                 session.ws = null;
 
+                clearTimeout(session.timeoutId);
                 session.timeoutId = setTimeout(() => {
                     console.log('⏰ PTY session timeout, killing process:', ptySessionKey);
                     if (session.pty && session.pty.kill) {

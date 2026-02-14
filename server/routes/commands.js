@@ -490,12 +490,14 @@ router.post('/execute', async (req, res) => {
 
     // Replace $ARGUMENTS with all arguments joined
     const argsString = args.join(' ');
-    processedContent = processedContent.replace(/\$ARGUMENTS/g, argsString);
+    const safeArgsString = argsString.replace(/\$/g, '$$$$');
+    processedContent = processedContent.replace(/\$ARGUMENTS/g, safeArgsString);
 
     // Replace $1, $2, etc. with positional arguments
     args.forEach((arg, index) => {
       const placeholder = `$${index + 1}`;
-      processedContent = processedContent.replace(new RegExp(`\\${placeholder}\\b`, 'g'), arg);
+      const safeArg = arg.replace(/\$/g, '$$$$');
+      processedContent = processedContent.replace(new RegExp(`\\${placeholder}\\b`, 'g'), safeArg);
     });
 
     res.json({

@@ -10,12 +10,30 @@ import { promises as fsPromises } from 'fs';
 import path from 'path';
 import os from 'os';
 
+// Cache for detectTaskMasterMCPServer results (30s TTL)
+let mcpDetectionCache = null;
+let mcpDetectionCacheTime = 0;
+const MCP_CACHE_TTL = 30000;
+
 /**
  * Check if task-master-ai MCP server is configured
  * Reads directly from Claude configuration files like claude-cli.js does
+ * Results are cached for 30 seconds to avoid redundant disk reads.
  * @returns {Promise<Object>} MCP detection result
  */
 export async function detectTaskMasterMCPServer() {
+    const now = Date.now();
+    if (mcpDetectionCache && (now - mcpDetectionCacheTime) < MCP_CACHE_TTL) {
+        return mcpDetectionCache;
+    }
+
+    const result = await _detectTaskMasterMCPServerUncached();
+    mcpDetectionCache = result;
+    mcpDetectionCacheTime = now;
+    return result;
+}
+
+async function _detectTaskMasterMCPServerUncached() {
     try {
         // Read Claude configuration files directly (same logic as mcp.js)
         const homeDir = os.homedir();

@@ -18,14 +18,16 @@
  * Handles both existing sessions (with real IDs) and new sessions (with temporary IDs).
  */
 
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useRef, Suspense } from 'react';
 import { BrowserRouter as Router, Routes, Route, useNavigate, useParams } from 'react-router-dom';
 import { Settings as SettingsIcon, Sparkles } from 'lucide-react';
 import Sidebar from './components/Sidebar';
 import MainContent from './components/MainContent';
-import MobileNav from './components/MobileNav';
-import Settings from './components/Settings';
-import QuickSettingsPanel from './components/QuickSettingsPanel';
+import { shallowEqual } from './utils/shallowEqual';
+
+const MobileNav = React.lazy(() => import('./components/MobileNav'));
+const Settings = React.lazy(() => import('./components/Settings'));
+const QuickSettingsPanel = React.lazy(() => import('./components/QuickSettingsPanel'));
 
 import { ThemeProvider } from './contexts/ThemeContext';
 import { AuthProvider } from './contexts/AuthContext';
@@ -253,7 +255,7 @@ function AppContent() {
           const updatedSelectedProject = updatedProjects.find(p => p.name === selectedProject.name);
           if (updatedSelectedProject) {
             // Only update selected project if it actually changed - prevents flickering
-            if (JSON.stringify(updatedSelectedProject) !== JSON.stringify(selectedProject)) {
+            if (!shallowEqual(updatedSelectedProject, selectedProject)) {
               setSelectedProject(updatedSelectedProject);
             }
 
@@ -506,14 +508,14 @@ function AppContent() {
         const refreshedProject = freshProjects.find(p => p.name === selectedProject.name);
         if (refreshedProject) {
           // Only update selected project if it actually changed
-          if (JSON.stringify(refreshedProject) !== JSON.stringify(selectedProject)) {
+          if (!shallowEqual(refreshedProject, selectedProject)) {
             setSelectedProject(refreshedProject);
           }
           
           // If we have a selected session, try to find it in the refreshed project
           if (selectedSession) {
             const refreshedSession = refreshedProject.sessions?.find(s => s.id === selectedSession.id);
-            if (refreshedSession && JSON.stringify(refreshedSession) !== JSON.stringify(selectedSession)) {
+            if (refreshedSession && !shallowEqual(refreshedSession, selectedSession)) {
               setSelectedSession(refreshedSession);
             }
           }
@@ -961,38 +963,44 @@ function AppContent() {
 
       {/* Mobile Bottom Navigation */}
       {isMobile && (
-        <MobileNav
-          activeTab={activeTab}
-          setActiveTab={setActiveTab}
-          isInputFocused={isInputFocused}
-        />
+        <Suspense fallback={null}>
+          <MobileNav
+            activeTab={activeTab}
+            setActiveTab={setActiveTab}
+            isInputFocused={isInputFocused}
+          />
+        </Suspense>
       )}
       {/* Quick Settings Panel - Only show on chat tab */}
       {activeTab === 'chat' && (
-        <QuickSettingsPanel
-          isOpen={showQuickSettings}
-          onToggle={setShowQuickSettings}
-          autoExpandTools={autoExpandTools}
-          onAutoExpandChange={setAutoExpandTools}
-          showRawParameters={showRawParameters}
-          onShowRawParametersChange={setShowRawParameters}
-          showThinking={showThinking}
-          onShowThinkingChange={setShowThinking}
-          autoScrollToBottom={autoScrollToBottom}
-          onAutoScrollChange={setAutoScrollToBottom}
-          sendByCtrlEnter={sendByCtrlEnter}
-          onSendByCtrlEnterChange={setSendByCtrlEnter}
-          isMobile={isMobile}
-        />
+        <Suspense fallback={null}>
+          <QuickSettingsPanel
+            isOpen={showQuickSettings}
+            onToggle={setShowQuickSettings}
+            autoExpandTools={autoExpandTools}
+            onAutoExpandChange={setAutoExpandTools}
+            showRawParameters={showRawParameters}
+            onShowRawParametersChange={setShowRawParameters}
+            showThinking={showThinking}
+            onShowThinkingChange={setShowThinking}
+            autoScrollToBottom={autoScrollToBottom}
+            onAutoScrollChange={setAutoScrollToBottom}
+            sendByCtrlEnter={sendByCtrlEnter}
+            onSendByCtrlEnterChange={setSendByCtrlEnter}
+            isMobile={isMobile}
+          />
+        </Suspense>
       )}
 
       {/* Settings Modal */}
-      <Settings
-        isOpen={showSettings}
-        onClose={() => setShowSettings(false)}
-        projects={projects}
-        initialTab={settingsInitialTab}
-      />
+      <Suspense fallback={null}>
+        <Settings
+          isOpen={showSettings}
+          onClose={() => setShowSettings(false)}
+          projects={projects}
+          initialTab={settingsInitialTab}
+        />
+      </Suspense>
 
       {/* Version Upgrade Modal */}
       <VersionUpgradeModal />

@@ -381,10 +381,16 @@ async function cloneGitHubRepo(githubUrl, githubToken = null, projectPath) {
       console.log('🔄 Cloning repository:', githubUrl);
       console.log('📁 Destination:', cloneDir);
 
-      // Execute git clone
+      // Execute git clone with timeout
+      const abortController = new AbortController();
+      const cloneTimeout = setTimeout(() => {
+        abortController.abort();
+      }, 60000); // 60 second timeout
+
       const gitProcess = spawn('git', ['clone', '--depth', '1', cloneUrl, cloneDir], {
         stdio: ['pipe', 'pipe', 'pipe'],
-        env: cloneEnv
+        env: cloneEnv,
+        signal: abortController.signal
       });
 
       let stdout = '';
@@ -400,6 +406,7 @@ async function cloneGitHubRepo(githubUrl, githubToken = null, projectPath) {
       });
 
       gitProcess.on('close', (code) => {
+        clearTimeout(cloneTimeout);
         if (code === 0) {
           console.log('✅ Repository cloned successfully');
           resolve(cloneDir);
@@ -410,7 +417,12 @@ async function cloneGitHubRepo(githubUrl, githubToken = null, projectPath) {
       });
 
       gitProcess.on('error', (error) => {
-        reject(new Error(`Failed to execute git: ${error.message}`));
+        clearTimeout(cloneTimeout);
+        if (error.name === 'AbortError') {
+          reject(new Error('Git clone timed out after 60 seconds'));
+        } else {
+          reject(new Error(`Failed to execute git: ${error.message}`));
+        }
       });
     } catch (error) {
       reject(error);
