@@ -386,15 +386,15 @@ app.use(helmet({
       frameSrc: ["'none'"],
       childSrc: ["'none'"],
       formAction: ["'self'"],
-      upgradeInsecureRequests: process.env.NODE_ENV === 'production' ? [] : null
+      upgradeInsecureRequests: process.env.NODE_ENV === 'production' && process.env.FORCE_HTTPS !== 'false' ? [] : null
     }
   },
   // HTTP Strict Transport Security
-  hsts: {
+  hsts: process.env.FORCE_HTTPS !== 'false' ? {
     maxAge: 31536000, // 1 year
     includeSubDomains: true,
     preload: true
-  },
+  } : false,
   // Referrer Policy
   referrerPolicy: {
     policy: 'strict-origin-when-cross-origin'

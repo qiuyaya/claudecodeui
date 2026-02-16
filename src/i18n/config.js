@@ -46,9 +46,9 @@ const getSavedLanguage = () => {
     if (saved && languages.some(lang => lang.value === saved)) {
       return saved;
     }
-    return 'en';
+    return 'zh-CN';
   } catch {
-    return 'en';
+    return 'zh-CN';
   }
 };
 
@@ -89,7 +89,7 @@ i18n
     lng: getSavedLanguage(),
 
     // Fallback language when a translation is missing
-    fallbackLng: 'en',
+    fallbackLng: 'zh-CN',
 
     // Enable debug mode in development (logs missing keys to console)
     debug: import.meta.env.DEV,
