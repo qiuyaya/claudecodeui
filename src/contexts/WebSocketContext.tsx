@@ -124,12 +124,12 @@ const useWebSocketProviderState = (): WebSocketContextType => {
 
   const sendMessage = useCallback((message: any) => {
     const socket = wsRef.current;
-    if (socket && isConnected) {
+    if (socket && socket.readyState === WebSocket.OPEN) {
       socket.send(JSON.stringify(message));
     } else {
       console.warn('WebSocket not connected');
     }
-  }, [isConnected]);
+  }, []);
 
   const value: WebSocketContextType = useMemo(() =>
   ({
