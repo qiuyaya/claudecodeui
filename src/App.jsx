@@ -56,6 +56,9 @@ function AppContent() {
   const [showVersionModal, setShowVersionModal] = useState(false);
   
   const [projects, setProjects] = useState([]);
+  const [projectsTotal, setProjectsTotal] = useState(0);
+  const [hasMoreProjects, setHasMoreProjects] = useState(false);
+  const [isLoadingMoreProjects, setIsLoadingMoreProjects] = useState(false);
   const [selectedProject, setSelectedProject] = useState(null);
   const [selectedSession, setSelectedSession] = useState(null);
   const [activeTab, setActiveTab] = useState('chat'); // 'chat' or 'files'
@@ -283,10 +286,18 @@ function AppContent() {
     };
   }, [latestMessage, selectedProject, selectedSession, activeSessions]);
 
-  const fetchProjects = async () => {
+  const PROJECT_PAGE_SIZE = 30;
+
+  const fetchProjects = async (loadMore = false) => {
     try {
-      setIsLoadingProjects(true);
-      const response = await api.projects();
+      if (loadMore) {
+        setIsLoadingMoreProjects(true);
+      } else {
+        setIsLoadingProjects(true);
+      }
+
+      const offset = loadMore ? projects.length : 0;
+      const response = await api.projects(PROJECT_PAGE_SIZE, offset);
 
       // Handle rate limiting and other non-OK responses
       if (!response.ok) {
@@ -294,72 +305,38 @@ function AppContent() {
         if (response.status === 429) {
           console.warn('Rate limit exceeded. Please wait before refreshing.');
         }
-        setIsLoadingProjects(false);
         return;
       }
 
       const data = await response.json();
 
-      // Ensure data is an array
-      if (!Array.isArray(data)) {
-        console.error('Invalid projects data received:', data);
-        setIsLoadingProjects(false);
-        return;
-      }
+      // Handle paginated response
+      if (data.projects && Array.isArray(data.projects)) {
+        setProjectsTotal(data.total);
+        setHasMoreProjects(data.hasMore);
 
-      // Always fetch Cursor sessions for each project so we can combine views
-      for (let project of data) {
-        try {
-          const url = `/api/cursor/sessions?projectPath=${encodeURIComponent(project.fullPath || project.path)}`;
-          const cursorResponse = await authenticatedFetch(url);
-          if (cursorResponse.ok) {
-            const cursorData = await cursorResponse.json();
-            if (cursorData.success && cursorData.sessions) {
-              project.cursorSessions = cursorData.sessions;
-            } else {
-              project.cursorSessions = [];
-            }
-          } else {
-            project.cursorSessions = [];
-          }
-        } catch (error) {
-          console.error(`Error fetching Cursor sessions for project ${project.name}:`, error);
-          project.cursorSessions = [];
+        if (loadMore) {
+          setProjects(prev => [...prev, ...data.projects]);
+        } else {
+          setProjects(data.projects);
         }
+      } else if (Array.isArray(data)) {
+        // Fallback for non-paginated response
+        setProjects(data);
+        setProjectsTotal(data.length);
+        setHasMoreProjects(false);
       }
-      
-      // Optimize to preserve object references when data hasn't changed
-      setProjects(prevProjects => {
-        // If no previous projects, just set the new data
-        if (prevProjects.length === 0) {
-          return data;
-        }
-        
-        // Check if the projects data has actually changed
-        const hasChanges = data.some((newProject, index) => {
-          const prevProject = prevProjects[index];
-          if (!prevProject) return true;
-          
-          // Compare key properties that would affect UI
-          return (
-            newProject.name !== prevProject.name ||
-            newProject.displayName !== prevProject.displayName ||
-            newProject.fullPath !== prevProject.fullPath ||
-            JSON.stringify(newProject.sessionMeta) !== JSON.stringify(prevProject.sessionMeta) ||
-            JSON.stringify(newProject.sessions) !== JSON.stringify(prevProject.sessions) ||
-            JSON.stringify(newProject.cursorSessions) !== JSON.stringify(prevProject.cursorSessions)
-          );
-        }) || data.length !== prevProjects.length;
-        
-        // Only update if there are actual changes
-        return hasChanges ? data : prevProjects;
-      });
-      
-      // Don't auto-select any project - user should choose manually
     } catch (error) {
       console.error('Error fetching projects:', error);
     } finally {
       setIsLoadingProjects(false);
+      setIsLoadingMoreProjects(false);
+    }
+  };
+
+  const fetchMoreProjects = () => {
+    if (!isLoadingMoreProjects && hasMoreProjects) {
+      fetchProjects(true);
     }
   };
 
@@ -479,40 +456,27 @@ function AppContent() {
 
 
   const handleSidebarRefresh = async () => {
-    // Refresh only the sessions for all projects, don't change selected state
+    // Force refresh: clear cache and reload all projects
     try {
-      const response = await api.projects();
+      setIsLoadingProjects(true);
+      const response = await authenticatedFetch('/api/projects?refresh=true');
+      if (!response.ok) return;
       const freshProjects = await response.json();
-      
-      // Optimize to preserve object references and minimize re-renders
-      setProjects(prevProjects => {
-        // Check if projects data has actually changed
-        const hasChanges = freshProjects.some((newProject, index) => {
-          const prevProject = prevProjects[index];
-          if (!prevProject) return true;
-          
-          return (
-            newProject.name !== prevProject.name ||
-            newProject.displayName !== prevProject.displayName ||
-            newProject.fullPath !== prevProject.fullPath ||
-            JSON.stringify(newProject.sessionMeta) !== JSON.stringify(prevProject.sessionMeta) ||
-            JSON.stringify(newProject.sessions) !== JSON.stringify(prevProject.sessions)
-          );
-        }) || freshProjects.length !== prevProjects.length;
-        
-        return hasChanges ? freshProjects : prevProjects;
-      });
-      
+
+      // Handle both paginated and flat response
+      const projectList = Array.isArray(freshProjects) ? freshProjects : freshProjects.projects || [];
+
+      setProjects(projectList);
+      setProjectsTotal(Array.isArray(freshProjects) ? projectList.length : freshProjects.total || projectList.length);
+      setHasMoreProjects(Array.isArray(freshProjects) ? false : freshProjects.hasMore || false);
+
       // If we have a selected project, make sure it's still selected after refresh
       if (selectedProject) {
-        const refreshedProject = freshProjects.find(p => p.name === selectedProject.name);
+        const refreshedProject = projectList.find(p => p.name === selectedProject.name);
         if (refreshedProject) {
-          // Only update selected project if it actually changed
           if (!shallowEqual(refreshedProject, selectedProject)) {
             setSelectedProject(refreshedProject);
           }
-          
-          // If we have a selected session, try to find it in the refreshed project
           if (selectedSession) {
             const refreshedSession = refreshedProject.sessions?.find(s => s.id === selectedSession.id);
             if (refreshedSession && !shallowEqual(refreshedSession, selectedSession)) {
@@ -523,6 +487,8 @@ function AppContent() {
       }
     } catch (error) {
       console.error('Error refreshing sidebar:', error);
+    } finally {
+      setIsLoadingProjects(false);
     }
   };
 
@@ -533,10 +499,24 @@ function AppContent() {
       setSelectedSession(null);
       navigate('/');
     }
-    
+
     // Update projects state locally instead of full refresh
-    setProjects(prevProjects => 
+    setProjects(prevProjects =>
       prevProjects.filter(project => project.name !== projectName)
+    );
+  };
+
+  const handleProjectsDelete = (projectNames) => {
+    // Clear selected project/session if any of the deleted projects was selected
+    if (selectedProject && projectNames.includes(selectedProject.name)) {
+      setSelectedProject(null);
+      setSelectedSession(null);
+      navigate('/');
+    }
+
+    // Update projects state locally - remove all deleted projects at once
+    setProjects(prevProjects =>
+      prevProjects.filter(project => !projectNames.includes(project.name))
     );
   };
 
@@ -817,6 +797,7 @@ function AppContent() {
                 onNewSession={handleNewSession}
                 onSessionDelete={handleSessionDelete}
                 onProjectDelete={handleProjectDelete}
+                onProjectsDelete={handleProjectsDelete}
                 isLoading={isLoadingProjects}
                 loadingProgress={loadingProgress}
                 onRefresh={handleSidebarRefresh}
@@ -829,6 +810,9 @@ function AppContent() {
                 isPWA={isPWA}
                 isMobile={isMobile}
                 onToggleSidebar={() => setSidebarVisible(false)}
+                hasMoreProjects={hasMoreProjects}
+                isLoadingMoreProjects={isLoadingMoreProjects}
+                onLoadMoreProjects={fetchMoreProjects}
               />
             ) : (
               /* Collapsed Sidebar */
@@ -924,6 +908,9 @@ function AppContent() {
               isPWA={isPWA}
               isMobile={isMobile}
               onToggleSidebar={() => setSidebarVisible(false)}
+              hasMoreProjects={hasMoreProjects}
+              isLoadingMoreProjects={isLoadingMoreProjects}
+              onLoadMoreProjects={fetchMoreProjects}
             />
           </div>
         </div>

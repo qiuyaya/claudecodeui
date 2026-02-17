@@ -690,10 +690,54 @@ app.post('/api/system/update', authenticateToken, async (req, res) => {
     }
 });
 
+// Project list cache
+let projectsCache = null;
+let projectsCacheTime = 0;
+const PROJECTS_CACHE_TTL = 60 * 1000; // 1 minute
+let projectsCachePromise = null;
+
+async function getCachedProjects(progressCallback) {
+  const now = Date.now();
+  if (projectsCache && (now - projectsCacheTime) < PROJECTS_CACHE_TTL) {
+    return projectsCache;
+  }
+  // Deduplicate concurrent requests
+  if (projectsCachePromise) return projectsCachePromise;
+  projectsCachePromise = getProjects(progressCallback).then(projects => {
+    projectsCache = projects;
+    projectsCacheTime = Date.now();
+    projectsCachePromise = null;
+    return projects;
+  }).catch(err => {
+    projectsCachePromise = null;
+    throw err;
+  });
+  return projectsCachePromise;
+}
+
 app.get('/api/projects', authenticateToken, async (req, res) => {
     try {
-        const projects = await getProjects(broadcastProgress);
-        res.json(projects);
+        const limit = parseInt(req.query.limit) || 0;
+        const offset = parseInt(req.query.offset) || 0;
+        const refresh = req.query.refresh === 'true';
+
+        if (refresh) {
+          projectsCache = null;
+          projectsCacheTime = 0;
+        }
+
+        const projects = await getCachedProjects(broadcastProgress);
+
+        if (limit > 0) {
+          const paged = projects.slice(offset, offset + limit);
+          res.json({
+            projects: paged,
+            total: projects.length,
+            hasMore: offset + limit < projects.length
+          });
+        } else {
+          res.json(projects);
+        }
     } catch (error) {
         res.status(500).json({ error: error.message });
     }
@@ -759,12 +803,13 @@ app.delete('/api/projects/:projectName/sessions/:sessionId', authenticateToken, 
     }
 });
 
-// Delete project endpoint (force=true to delete with sessions)
+// Delete project endpoint (force=true to delete with sessions, preserveSessions=true to keep session files)
 app.delete('/api/projects/:projectName', authenticateToken, async (req, res) => {
     try {
         const { projectName } = req.params;
         const force = req.query.force === 'true';
-        await deleteProject(projectName, force);
+        const preserveSessions = req.query.preserveSessions === 'true';
+        await deleteProject(projectName, force, preserveSessions);
         res.json({ success: true });
     } catch (error) {
         res.status(500).json({ error: error.message });

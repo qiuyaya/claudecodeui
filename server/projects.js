@@ -261,7 +261,7 @@ async function generateDisplayName(projectName, actualProjectDir = null) {
 }
 
 // Extract the actual project directory from JSONL sessions (with caching)
-async function extractProjectDirectory(projectName) {
+async function extractProjectDirectory(projectName, configOverride = null) {
   // Check cache first
   if (projectDirectoryCache.has(projectName)) {
     return projectDirectoryCache.get(projectName);
@@ -269,7 +269,7 @@ async function extractProjectDirectory(projectName) {
 
   // Check project config for originalPath (manually added projects via UI or platform)
   // This handles projects with dashes in their directory names correctly
-  const config = await loadProjectConfig();
+  const config = configOverride || await loadProjectConfig();
   if (config[projectName]?.originalPath) {
     const originalPath = config[projectName].originalPath;
     projectDirectoryCache.set(projectName, originalPath);
@@ -277,106 +277,103 @@ async function extractProjectDirectory(projectName) {
   }
 
   const projectDir = path.join(os.homedir(), '.claude', 'projects', projectName);
-  const cwdCounts = new Map();
-  let latestTimestamp = 0;
-  let latestCwd = null;
   let extractedPath;
-  
+
   try {
     // Check if the project directory exists
     await fs.access(projectDir);
-    
+
     const files = await fs.readdir(projectDir);
     const jsonlFiles = files.filter(file => file.endsWith('.jsonl'));
-    
+
     if (jsonlFiles.length === 0) {
       // Fall back to decoded project name if no sessions
       extractedPath = projectName.replace(/-/g, '/');
     } else {
-      // Process all JSONL files to collect cwd values
-      for (const file of jsonlFiles) {
-        const jsonlFile = path.join(projectDir, file);
-        const fileStream = fsSync.createReadStream(jsonlFile);
-        const rl = readline.createInterface({
-          input: fileStream,
-          crlfDelay: Infinity
-        });
-        
-        for await (const line of rl) {
-          if (line.trim()) {
-            try {
-              const entry = JSON.parse(line);
-              
-              if (entry.cwd) {
-                // Count occurrences of each cwd
-                cwdCounts.set(entry.cwd, (cwdCounts.get(entry.cwd) || 0) + 1);
-                
-                // Track the most recent cwd
-                const timestamp = new Date(entry.timestamp || 0).getTime();
-                if (timestamp > latestTimestamp) {
-                  latestTimestamp = timestamp;
-                  latestCwd = entry.cwd;
-                }
-              }
-            } catch (parseError) {
-              // Skip malformed lines
+      // Only read the first few lines of the most recent JSONL file to find cwd
+      // Sort by filename (UUID-based, so pick the last one or use file stats)
+      let targetFile = jsonlFiles[0];
+
+      // Try to find the most recently modified file without reading all of them
+      if (jsonlFiles.length > 1) {
+        let latestMtime = 0;
+        for (const file of jsonlFiles) {
+          try {
+            const stat = await fs.stat(path.join(projectDir, file));
+            if (stat.mtimeMs > latestMtime) {
+              latestMtime = stat.mtimeMs;
+              targetFile = file;
             }
-          }
+          } catch { /* skip */ }
         }
       }
-      
-      // Determine the best cwd to use
-      if (cwdCounts.size === 0) {
-        // No cwd found, fall back to decoded project name
-        extractedPath = projectName.replace(/-/g, '/');
-      } else if (cwdCounts.size === 1) {
-        // Only one cwd, use it
-        extractedPath = Array.from(cwdCounts.keys())[0];
+
+      // Read only the first lines to find cwd (typically in the first entry)
+      const jsonlFile = path.join(projectDir, targetFile);
+      const cwd = await extractCwdFromFile(jsonlFile);
+
+      if (cwd) {
+        extractedPath = cwd;
       } else {
-        // Multiple cwd values - prefer the most recent one if it has reasonable usage
-        const mostRecentCount = cwdCounts.get(latestCwd) || 0;
-        const maxCount = Math.max(...cwdCounts.values());
-        
-        // Use most recent if it has at least 25% of the max count
-        if (mostRecentCount >= maxCount * 0.25) {
-          extractedPath = latestCwd;
-        } else {
-          // Otherwise use the most frequently used cwd
-          for (const [cwd, count] of cwdCounts.entries()) {
-            if (count === maxCount) {
-              extractedPath = cwd;
-              break;
-            }
-          }
-        }
-        
-        // Fallback (shouldn't reach here)
-        if (!extractedPath) {
-          extractedPath = latestCwd || projectName.replace(/-/g, '/');
-        }
+        // Fall back to decoded project name
+        extractedPath = projectName.replace(/-/g, '/');
       }
     }
-    
+
     // Cache the result
     projectDirectoryCache.set(projectName, extractedPath);
-    
+
     return extractedPath;
-    
+
   } catch (error) {
     // If the directory doesn't exist, just use the decoded project name
-    if (error.code === 'ENOENT') {
-      extractedPath = projectName.replace(/-/g, '/');
-    } else {
+    if (error.code !== 'ENOENT') {
       console.error(`Error extracting project directory for ${projectName}:`, error);
-      // Fall back to decoded project name for other errors
-      extractedPath = projectName.replace(/-/g, '/');
     }
-    
+    extractedPath = projectName.replace(/-/g, '/');
+
     // Cache the fallback result too
     projectDirectoryCache.set(projectName, extractedPath);
-    
+
     return extractedPath;
   }
+}
+
+// Read only the first N lines of a JSONL file to extract cwd
+async function extractCwdFromFile(filePath, maxLines = 20) {
+  return new Promise((resolve) => {
+    const fileStream = fsSync.createReadStream(filePath, { encoding: 'utf8' });
+    const rl = readline.createInterface({
+      input: fileStream,
+      crlfDelay: Infinity
+    });
+
+    let linesRead = 0;
+    let foundCwd = null;
+
+    rl.on('line', (line) => {
+      linesRead++;
+      if (line.trim()) {
+        try {
+          const entry = JSON.parse(line);
+          if (entry.cwd) {
+            foundCwd = entry.cwd;
+            rl.close();
+            fileStream.destroy();
+            return;
+          }
+        } catch { /* skip malformed lines */ }
+      }
+      if (linesRead >= maxLines) {
+        rl.close();
+        fileStream.destroy();
+      }
+    });
+
+    rl.on('close', () => resolve(foundCwd));
+    rl.on('error', () => resolve(null));
+    fileStream.on('error', () => resolve(null));
+  });
 }
 
 async function getProjects(progressCallback = null) {
@@ -406,86 +403,72 @@ async function getProjects(progressCallback = null) {
 
     totalProjects = directories.length + manualProjectsCount;
 
-    for (const entry of directories) {
-        processedProjects++;
+    // Process projects in parallel with concurrency limit
+    const CONCURRENCY = 20;
+    const processProject = async (entry) => {
+        const actualProjectDir = await extractProjectDirectory(entry.name, config);
 
-        // Emit progress
-        if (progressCallback) {
-          progressCallback({
-            phase: 'loading',
-            current: processedProjects,
-            total: totalProjects,
-            currentProject: entry.name
-          });
-        }
-
-        const projectPath = path.join(claudeDir, entry.name);
-        
-        // Extract actual project directory from JSONL sessions
-        const actualProjectDir = await extractProjectDirectory(entry.name);
-        
-        // Get display name from config or generate one
         const customName = config[entry.name]?.displayName;
         const autoDisplayName = await generateDisplayName(entry.name, actualProjectDir);
-        const fullPath = actualProjectDir;
-        
+
         const project = {
           name: entry.name,
           path: actualProjectDir,
           displayName: customName || autoDisplayName,
-          fullPath: fullPath,
+          fullPath: actualProjectDir,
           isCustomName: !!customName,
           sessions: []
         };
-        
-        // Try to get sessions for this project (just first 5 for performance)
-        try {
-          const sessionResult = await getSessions(entry.name, 5, 0);
-          project.sessions = sessionResult.sessions || [];
+
+        // Run session and detection queries in parallel (lightweight meta only)
+        const [sessionMeta, cursorSessions, codexSessions, taskMasterResult] = await Promise.allSettled([
+          getSessionsMeta(entry.name),
+          getCursorSessions(actualProjectDir),
+          getCodexSessions(actualProjectDir),
+          detectTaskMasterFolder(actualProjectDir)
+        ]);
+
+        if (sessionMeta.status === 'fulfilled') {
           project.sessionMeta = {
-            hasMore: sessionResult.hasMore,
-            total: sessionResult.total
+            hasMore: sessionMeta.value.total > 0,
+            total: sessionMeta.value.total,
+            lastActivity: sessionMeta.value.lastActivity
           };
-        } catch (e) {
-          console.warn(`Could not load sessions for project ${entry.name}:`, e.message);
-        }
-        
-        // Also fetch Cursor sessions for this project
-        try {
-          project.cursorSessions = await getCursorSessions(actualProjectDir);
-        } catch (e) {
-          console.warn(`Could not load Cursor sessions for project ${entry.name}:`, e.message);
-          project.cursorSessions = [];
         }
 
-        // Also fetch Codex sessions for this project
-        try {
-          project.codexSessions = await getCodexSessions(actualProjectDir);
-        } catch (e) {
-          console.warn(`Could not load Codex sessions for project ${entry.name}:`, e.message);
-          project.codexSessions = [];
-        }
+        project.cursorSessions = cursorSessions.status === 'fulfilled' ? cursorSessions.value : [];
+        project.codexSessions = codexSessions.status === 'fulfilled' ? codexSessions.value : [];
 
-        // Add TaskMaster detection
-        try {
-          const taskMasterResult = await detectTaskMasterFolder(actualProjectDir);
+        if (taskMasterResult.status === 'fulfilled') {
+          const tm = taskMasterResult.value;
           project.taskmaster = {
-            hasTaskmaster: taskMasterResult.hasTaskmaster,
-            hasEssentialFiles: taskMasterResult.hasEssentialFiles,
-            metadata: taskMasterResult.metadata,
-            status: taskMasterResult.hasTaskmaster && taskMasterResult.hasEssentialFiles ? 'configured' : 'not-configured'
+            hasTaskmaster: tm.hasTaskmaster,
+            hasEssentialFiles: tm.hasEssentialFiles,
+            metadata: tm.metadata,
+            status: tm.hasTaskmaster && tm.hasEssentialFiles ? 'configured' : 'not-configured'
           };
-        } catch (e) {
-          console.warn(`Could not detect TaskMaster for project ${entry.name}:`, e.message);
-          project.taskmaster = {
-            hasTaskmaster: false,
-            hasEssentialFiles: false,
-            metadata: null,
-            status: 'error'
-          };
+        } else {
+          project.taskmaster = { hasTaskmaster: false, hasEssentialFiles: false, metadata: null, status: 'error' };
         }
 
-      projects.push(project);
+        return project;
+    };
+
+    // Process in batches to limit concurrency
+    for (let i = 0; i < directories.length; i += CONCURRENCY) {
+      const batch = directories.slice(i, i + CONCURRENCY);
+      const results = await Promise.all(batch.map(entry => processProject(entry)));
+      projects.push(...results);
+
+      processedProjects += batch.length;
+      if (progressCallback) {
+        progressCallback({
+          phase: 'loading',
+          current: processedProjects,
+          total: totalProjects,
+          currentProject: batch[batch.length - 1].name
+        });
+      }
     }
   } catch (error) {
     // If the directory doesn't exist (ENOENT), that's okay - just continue with empty projects
@@ -591,6 +574,29 @@ async function getProjects(progressCallback = null) {
   }
 
   return projects;
+}
+
+// Lightweight session metadata for project list (no JSONL parsing)
+async function getSessionsMeta(projectName) {
+  const projectDir = path.join(os.homedir(), '.claude', 'projects', projectName);
+  try {
+    const files = await fs.readdir(projectDir);
+    const jsonlFiles = files.filter(file => file.endsWith('.jsonl') && !file.startsWith('agent-'));
+    if (jsonlFiles.length === 0) {
+      return { total: 0, lastActivity: null };
+    }
+    // Get the most recent file's mtime as lastActivity
+    let latestMtime = 0;
+    for (const file of jsonlFiles) {
+      try {
+        const stat = await fs.stat(path.join(projectDir, file));
+        if (stat.mtimeMs > latestMtime) latestMtime = stat.mtimeMs;
+      } catch { /* skip */ }
+    }
+    return { total: jsonlFiles.length, lastActivity: latestMtime ? new Date(latestMtime) : null };
+  } catch {
+    return { total: 0, lastActivity: null };
+  }
 }
 
 async function getSessions(projectName, limit = 5, offset = 0) {
@@ -1026,14 +1032,17 @@ async function isProjectEmpty(projectName) {
   }
 }
 
-// Delete a project (force=true to delete even with sessions)
-async function deleteProject(projectName, force = false) {
+// Delete a project (force=true to delete even with sessions, preserveSessions=true to keep session files)
+async function deleteProject(projectName, force = false, preserveSessions = false) {
   const projectDir = path.join(os.homedir(), '.claude', 'projects', projectName);
 
   try {
-    const isEmpty = await isProjectEmpty(projectName);
-    if (!isEmpty && !force) {
-      throw new Error('Cannot delete project with existing sessions');
+    // If not preserving sessions, check if project is empty
+    if (!preserveSessions) {
+      const isEmpty = await isProjectEmpty(projectName);
+      if (!isEmpty && !force) {
+        throw new Error('Cannot delete project with existing sessions');
+      }
     }
 
     const config = await loadProjectConfig();

@@ -103,10 +103,18 @@
   "deleteConfirmation": {
     "deleteProject": "删除项目",
     "deleteSession": "删除会话",
+    "batchDeleteProject": "删除项目",
     "confirmDelete": "您确定要删除",
+    "confirmBatchDelete": "您确定要删除 {{count}} 个项目吗？",
     "sessionCount_one": "此项目包含 {{count}} 个对话。",
     "sessionCount_other": "此项目包含 {{count}} 个对话。",
     "allConversationsDeleted": "所有对话将被永久删除。",
-    "cannotUndo": "此操作无法撤销。"
+    "sessionsPreserved": "关联的会话将被保留。",
+    "cannotUndo": "此操作无法撤销。",
+    "andMore": "以及 {{count}} 个更多"
+  },
+  "batchSelect": {
+    "all": "全选",
+    "deleteSelected": "删除 ({{count}})"
   }
 }

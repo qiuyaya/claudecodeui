@@ -50,11 +50,11 @@ export const refreshLimiter = rateLimit({
   }
 });
 
-// API general rate limiter: 100 requests per minute
+// API general rate limiter: 600 requests per minute
 // Prevents API abuse and DoS attacks
 export const apiLimiter = rateLimit({
   windowMs: 1 * 60 * 1000, // 1 minute
-  max: 100, // Maximum 100 requests per window
+  max: 600, // Maximum 600 requests per window
   message: {
     error: 'Too many requests from this IP, please try again later',
     retryAfter: 60 // seconds

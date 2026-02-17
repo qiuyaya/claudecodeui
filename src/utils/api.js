@@ -169,7 +169,10 @@ export const api = {
 
   // Protected endpoints
   // config endpoint removed - no longer needed (frontend uses window.location)
-  projects: () => authenticatedFetch('/api/projects'),
+  projects: (limit = 0, offset = 0) => {
+    const params = limit > 0 ? `?limit=${limit}&offset=${offset}` : '';
+    return authenticatedFetch(`/api/projects${params}`);
+  },
   sessions: (projectName, limit = 5, offset = 0) => 
     authenticatedFetch(`/api/projects/${projectName}/sessions?limit=${limit}&offset=${offset}`),
   sessionMessages: (projectName, sessionId, limit = null, offset = 0, provider = 'claude') => {
@@ -204,10 +207,15 @@ export const api = {
     authenticatedFetch(`/api/codex/sessions/${sessionId}`, {
       method: 'DELETE',
     }),
-  deleteProject: (projectName, force = false) =>
-    authenticatedFetch(`/api/projects/${projectName}${force ? '?force=true' : ''}`, {
+  deleteProject: (projectName, force = false, preserveSessions = false) => {
+    const params = [];
+    if (force) params.push('force=true');
+    if (preserveSessions) params.push('preserveSessions=true');
+    const queryString = params.length > 0 ? `?${params.join('&')}` : '';
+    return authenticatedFetch(`/api/projects/${projectName}${queryString}`, {
       method: 'DELETE',
-    }),
+    });
+  },
   createProject: (path) =>
     authenticatedFetch('/api/projects/create', {
       method: 'POST',

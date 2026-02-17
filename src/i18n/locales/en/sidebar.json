@@ -103,10 +103,18 @@
   "deleteConfirmation": {
     "deleteProject": "Delete Project",
     "deleteSession": "Delete Session",
+    "batchDeleteProject": "Delete Projects",
     "confirmDelete": "Are you sure you want to delete",
+    "confirmBatchDelete": "Are you sure you want to delete {{count}} projects?",
     "sessionCount_one": "This project contains {{count}} conversation.",
     "sessionCount_other": "This project contains {{count}} conversations.",
     "allConversationsDeleted": "All conversations will be permanently deleted.",
-    "cannotUndo": "This action cannot be undone."
+    "sessionsPreserved": "Associated sessions will be preserved.",
+    "cannotUndo": "This action cannot be undone.",
+    "andMore": "and {{count}} more"
+  },
+  "batchSelect": {
+    "all": "Select all",
+    "deleteSelected": "Delete ({{count}})"
   }
 }

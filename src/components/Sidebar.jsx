@@ -44,6 +44,51 @@ const formatTimeAgo = (dateString, currentTime, t) => {
   return date.toLocaleDateString();
 };
 
+// Session load more button with auto-scroll detection
+function SessionLoadMoreButton({ project, loading, onLoadMore, t }) {
+  const ref = useRef(null);
+
+  useEffect(() => {
+    const element = ref.current;
+    if (!element) return;
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries[0].isIntersecting && !loading) {
+          onLoadMore();
+        }
+      },
+      { threshold: 0.1, rootMargin: '50px' }
+    );
+
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [loading, onLoadMore]);
+
+  return (
+    <div ref={ref}>
+      <Button
+        variant="ghost"
+        size="sm"
+        className="w-full justify-center gap-2 mt-2 text-muted-foreground"
+        disabled={loading}
+      >
+        {loading ? (
+          <>
+            <div className="w-3 h-3 animate-spin rounded-full border border-muted-foreground border-t-transparent" />
+            {t('sessions.loading')}
+          </>
+        ) : (
+          <>
+            <ChevronDown className="w-3 h-3" />
+            {t('sessions.showMore')}
+          </>
+        )}
+      </Button>
+    </div>
+  );
+}
+
 function Sidebar({
   projects,
   selectedProject,
@@ -53,6 +98,7 @@ function Sidebar({
   onNewSession,
   onSessionDelete,
   onProjectDelete,
+  onProjectsDelete,
   isLoading,
   loadingProgress,
   onRefresh,
@@ -64,7 +110,10 @@ function Sidebar({
   onShowVersionModal,
   isPWA,
   isMobile,
-  onToggleSidebar
+  onToggleSidebar,
+  hasMoreProjects,
+  isLoadingMoreProjects,
+  onLoadMoreProjects
 }) {
   const { t } = useTranslation('sidebar');
   const [expandedProjects, setExpandedProjects] = useState(new Set());
@@ -75,7 +124,26 @@ function Sidebar({
   const [additionalSessions, setAdditionalSessions] = useState({});
   const [initialSessionsLoaded, setInitialSessionsLoaded] = useState(new Set());
   const [currentTime, setCurrentTime] = useState(new Date());
-  const [projectSortOrder, setProjectSortOrder] = useState('name');
+  const [projectSortOrder, setProjectSortOrder] = useState('date');
+
+  // Scroll-based auto loading
+  const loadMoreRef = useRef(null);
+  const sessionLoadMoreRefs = useRef({});
+
+  useEffect(() => {
+    if (!hasMoreProjects || isLoadingMoreProjects) return;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries[0].isIntersecting && onLoadMoreProjects) {
+          onLoadMoreProjects();
+        }
+      },
+      { threshold: 0.1 }
+    );
+    const el = loadMoreRef.current;
+    if (el) observer.observe(el);
+    return () => { if (el) observer.unobserve(el); };
+  }, [hasMoreProjects, isLoadingMoreProjects, onLoadMoreProjects]);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [editingSession, setEditingSession] = useState(null);
   const [editingSessionName, setEditingSessionName] = useState('');
@@ -84,6 +152,10 @@ function Sidebar({
   const [deletingProjects, setDeletingProjects] = useState(new Set());
   const [deleteConfirmation, setDeleteConfirmation] = useState(null); // { project, sessionCount }
   const [sessionDeleteConfirmation, setSessionDeleteConfirmation] = useState(null); // { projectName, sessionId, sessionTitle, provider }
+
+  // Batch selection state
+  const [selectedProjects, setSelectedProjects] = useState(new Set());
+  const [batchDeleteConfirmation, setBatchDeleteConfirmation] = useState(null); // { projects: [], isOpen: false }
 
   // TaskMaster context
   const { setCurrentProject, mcpServerStatus } = useTaskMaster();
@@ -136,16 +208,18 @@ function Sidebar({
     }
   }, [selectedSession, selectedProject]);
 
-  // Mark sessions as loaded when projects come in
+  // Mark sessions as loaded when projects come in with actual session data
   useEffect(() => {
     if (projects.length > 0 && !isLoading) {
-      const newLoaded = new Set();
+      const newLoaded = new Set(initialSessionsLoaded);
       projects.forEach(project => {
-        if (project.sessions && project.sessions.length >= 0) {
+        if (project.sessions && project.sessions.length > 0) {
           newLoaded.add(project.name);
         }
       });
-      setInitialSessionsLoaded(newLoaded);
+      if (newLoaded.size !== initialSessionsLoaded.size) {
+        setInitialSessionsLoaded(newLoaded);
+      }
     }
   }, [projects, isLoading]);
 
@@ -156,7 +230,7 @@ function Sidebar({
         const savedSettings = localStorage.getItem('claude-settings');
         if (savedSettings) {
           const settings = JSON.parse(savedSettings);
-          setProjectSortOrder(settings.projectSortOrder || 'name');
+          setProjectSortOrder(settings.projectSortOrder || 'date');
         }
       } catch (error) {
         console.error('Error loading sort order:', error);
@@ -195,8 +269,32 @@ function Sidebar({
     // If clicking a different project, expand only that one
     if (!expandedProjects.has(projectName)) {
       newExpanded.add(projectName);
+      // Load sessions on demand when expanding
+      if (!initialSessionsLoaded.has(projectName)) {
+        loadSessionsForProject(projectName);
+      }
     }
     setExpandedProjects(newExpanded);
+  };
+
+  // Load sessions on demand for a project
+  const loadSessionsForProject = async (projectName) => {
+    setLoadingSessions(prev => ({ ...prev, [projectName]: true }));
+    try {
+      const response = await api.sessions(projectName, 5, 0);
+      if (response.ok) {
+        const result = await response.json();
+        setAdditionalSessions(prev => ({
+          ...prev,
+          [projectName]: result.sessions || []
+        }));
+        setInitialSessionsLoaded(prev => new Set([...prev, projectName]));
+      }
+    } catch (error) {
+      console.error(`Error loading sessions for ${projectName}:`, error);
+    } finally {
+      setLoadingSessions(prev => ({ ...prev, [projectName]: false }));
+    }
   };
 
   // Wrapper to attach project context when session is clicked
@@ -226,6 +324,14 @@ function Sidebar({
     return starredProjects.has(projectName);
   };
 
+  // Get session count for display (uses metadata when sessions not yet loaded)
+  const getSessionCount = (project) => {
+    const claudeCount = project.sessionMeta?.total || project.sessions?.length || 0;
+    const cursorCount = project.cursorSessions?.length || 0;
+    const codexCount = project.codexSessions?.length || 0;
+    return claudeCount + cursorCount + codexCount;
+  };
+
   // Helper function to get all sessions for a project (initial + additional)
   const getAllSessions = (project) => {
     // Combine Claude, Cursor, and Codex sessions; Sidebar will display icon per row
@@ -243,17 +349,22 @@ function Sidebar({
 
   // Helper function to get the last activity date for a project
   const getProjectLastActivity = (project) => {
+    // Use sessionMeta.lastActivity when sessions haven't been loaded yet
+    if (project.sessionMeta?.lastActivity) {
+      return new Date(project.sessionMeta.lastActivity);
+    }
+
     const allSessions = getAllSessions(project);
     if (allSessions.length === 0) {
       return new Date(0); // Return epoch date for projects with no sessions
     }
-    
+
     // Find the most recent session activity
     const mostRecentDate = allSessions.reduce((latest, session) => {
       const sessionDate = new Date(session.lastActivity);
       return sessionDate > latest ? sessionDate : latest;
     }, new Date(0));
-    
+
     return mostRecentDate;
   };
 
@@ -390,6 +501,72 @@ function Sidebar({
     }
   };
 
+  // Batch selection functions
+  const toggleProjectSelection = (projectName) => {
+    const newSelected = new Set(selectedProjects);
+    if (newSelected.has(projectName)) {
+      newSelected.delete(projectName);
+    } else {
+      newSelected.add(projectName);
+    }
+    setSelectedProjects(newSelected);
+  };
+
+  const toggleSelectAll = () => {
+    if (selectedProjects.size === filteredProjects.length) {
+      setSelectedProjects(new Set());
+    } else {
+      setSelectedProjects(new Set(filteredProjects.map(p => p.name)));
+    }
+  };
+
+  const handleBatchDelete = () => {
+    const selectedProjectNames = filteredProjects.filter(p => selectedProjects.has(p.name));
+    setBatchDeleteConfirmation({ projects: selectedProjectNames, isOpen: true });
+  };
+
+  const confirmBatchDelete = async () => {
+    if (!batchDeleteConfirmation) return;
+
+    const projectsToDelete = batchDeleteConfirmation.projects;
+    setBatchDeleteConfirmation(null);
+
+    // Add all to deleting set
+    setDeletingProjects(prev => new Set([...prev, ...projectsToDelete.map(p => p.name)]));
+
+    const deletedProjectNames = [];
+
+    // Delete each project (without deleting sessions)
+    for (const project of projectsToDelete) {
+      try {
+        const response = await api.deleteProject(project.name, false, true);
+
+        if (response.ok) {
+          deletedProjectNames.push(project.name);
+        } else {
+          const error = await response.json();
+          console.error(`Failed to delete project ${project.name}:`, error);
+        }
+      } catch (error) {
+        console.error(`Error deleting project ${project.name}:`, error);
+      } finally {
+        setDeletingProjects(prev => {
+          const next = new Set(prev);
+          next.delete(project.name);
+          return next;
+        });
+      }
+    }
+
+    // Notify parent to update projects list with all deleted projects at once
+    if (deletedProjectNames.length > 0 && onProjectsDelete) {
+      onProjectsDelete(deletedProjectNames);
+    }
+
+    // Clear selection after deletion
+    setSelectedProjects(new Set());
+  };
+
   const createNewProject = async () => {
     if (!newProjectPath.trim()) {
       alert(t('messages.enterProjectPath'));
@@ -436,7 +613,7 @@ function Sidebar({
   const loadMoreSessions = async (project) => {
     // Check if we can load more sessions
     const canLoadMore = project.sessionMeta?.hasMore !== false;
-    
+
     if (!canLoadMore || loadingSessions[project.name]) {
       return;
     }
@@ -615,6 +792,67 @@ function Sidebar({
         document.body
       )}
 
+      {/* Batch Delete Confirmation Modal */}
+      {batchDeleteConfirmation?.isOpen && ReactDOM.createPortal(
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+          <div className="bg-card border border-border rounded-xl shadow-2xl max-w-md w-full overflow-hidden">
+            <div className="p-6">
+              <div className="flex items-start gap-4">
+                <div className="w-12 h-12 rounded-full bg-red-100 dark:bg-red-900/30 flex items-center justify-center flex-shrink-0">
+                  <AlertTriangle className="w-6 h-6 text-red-600 dark:text-red-400" />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <h3 className="text-lg font-semibold text-foreground mb-2">
+                    {t('deleteConfirmation.batchDeleteProject')}
+                  </h3>
+                  <p className="text-sm text-muted-foreground mb-3">
+                    {t('deleteConfirmation.confirmBatchDelete', { count: batchDeleteConfirmation.projects.length })}
+                  </p>
+                  <div className="max-h-32 overflow-y-auto space-y-1 mb-3">
+                    {batchDeleteConfirmation.projects.slice(0, 5).map((project) => (
+                      <p key={project.name} className="text-xs text-foreground bg-muted/50 px-2 py-1 rounded truncate">
+                        {project.displayName || project.name}
+                      </p>
+                    ))}
+                    {batchDeleteConfirmation.projects.length > 5 && (
+                      <p className="text-xs text-muted-foreground">
+                        ...{t('deleteConfirmation.andMore', { count: batchDeleteConfirmation.projects.length - 5 })}
+                      </p>
+                    )}
+                  </div>
+                  <div className="p-3 bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-lg">
+                    <p className="text-sm text-blue-700 dark:text-blue-300">
+                      {t('deleteConfirmation.sessionsPreserved')}
+                    </p>
+                  </div>
+                  <p className="text-xs text-muted-foreground mt-3">
+                    {t('deleteConfirmation.cannotUndo')}
+                  </p>
+                </div>
+              </div>
+            </div>
+            <div className="flex gap-3 p-4 bg-muted/30 border-t border-border">
+              <Button
+                variant="outline"
+                className="flex-1"
+                onClick={() => setBatchDeleteConfirmation(null)}
+              >
+                {t('actions.cancel')}
+              </Button>
+              <Button
+                variant="destructive"
+                className="flex-1 bg-red-600 hover:bg-red-700 text-white"
+                onClick={confirmBatchDelete}
+              >
+                <Trash2 className="w-4 h-4 mr-2" />
+                {t('actions.delete')}
+              </Button>
+            </div>
+          </div>
+        </div>,
+        document.body
+      )}
+
       <div
         className="h-full flex flex-col bg-card md:select-none"
         style={isPWA && isMobile ? { paddingTop: '44px' } : {}}
@@ -783,6 +1021,52 @@ function Sidebar({
           </div>
         </div>
       )}
+
+      {/* Batch Selection Bar */}
+      {filteredProjects.length > 0 && !isLoading && (
+        <div className="px-3 md:px-4 py-2 border-b border-border bg-muted/20">
+          <div className="flex items-center justify-between gap-2">
+            <div className="flex items-center gap-2">
+              <button
+                onClick={toggleSelectAll}
+                className={cn(
+                  "w-5 h-5 rounded border-2 flex items-center justify-center transition-all duration-150",
+                  selectedProjects.size > 0 && selectedProjects.size === filteredProjects.length
+                    ? "bg-primary border-primary"
+                    : selectedProjects.size > 0
+                    ? "bg-primary/50 border-primary"
+                    : "border-border hover:border-muted-foreground"
+                )}
+              >
+                {selectedProjects.size > 0 && selectedProjects.size === filteredProjects.length && (
+                  <Check className="w-3 h-3 text-primary-foreground" />
+                )}
+                {selectedProjects.size > 0 && selectedProjects.size < filteredProjects.length && (
+                  <span className="w-2 h-2 rounded-sm bg-primary" />
+                )}
+              </button>
+              <span className="text-xs text-muted-foreground">
+                {selectedProjects.size > 0 ? (
+                  <span className="font-medium text-foreground">{selectedProjects.size}</span>
+                ) : (
+                  t('batchSelect.all')
+                )}
+              </span>
+            </div>
+            {selectedProjects.size > 0 && (
+              <Button
+                variant="destructive"
+                size="sm"
+                className="h-7 text-xs bg-red-600 hover:bg-red-700"
+                onClick={handleBatchDelete}
+              >
+                <Trash2 className="w-3 h-3 mr-1" />
+                {t('batchSelect.deleteSelected', { count: selectedProjects.size })}
+              </Button>
+            )}
+          </div>
+        </div>
+      )}
       
       {/* Projects List */}
       <ScrollArea className="flex-1 md:px-2 md:py-3 overflow-y-auto overscroll-contain">
@@ -792,10 +1076,6 @@ function Sidebar({
               <div className="w-12 h-12 bg-muted rounded-lg flex items-center justify-center mx-auto mb-4 md:mb-3">
                 <div className="w-6 h-6 animate-spin rounded-full border-2 border-muted-foreground border-t-transparent" />
               </div>
-              <h3 className="text-base font-medium text-foreground mb-2 md:mb-1">{t('projects.loadingProjects')}</h3>
-              <p className="text-sm text-muted-foreground">
-                {t('projects.fetchingProjects')}
-              </p>
               <h3 className="text-base font-medium text-foreground mb-2 md:mb-1">{t('projects.loadingProjects')}</h3>
               {loadingProgress && loadingProgress.total > 0 ? (
                 <div className="space-y-2">
@@ -867,6 +1147,23 @@ function Sidebar({
                       >
                         <div className="flex items-center justify-between">
                           <div className="flex items-center gap-3 min-w-0 flex-1">
+                            {/* Selection Checkbox */}
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                toggleProjectSelection(project.name);
+                              }}
+                              className={cn(
+                                "w-6 h-6 rounded border-2 flex items-center justify-center flex-shrink-0 transition-all duration-150",
+                                selectedProjects.has(project.name)
+                                  ? "bg-primary border-primary"
+                                  : "border-border hover:border-muted-foreground"
+                              )}
+                            >
+                              {selectedProjects.has(project.name) && (
+                                <Check className="w-3.5 h-3.5 text-primary-foreground" />
+                              )}
+                            </button>
                             <div className={cn(
                               "w-8 h-8 rounded-lg flex items-center justify-center transition-colors",
                               isExpanded ? "bg-primary/10" : "bg-muted"
@@ -921,10 +1218,8 @@ function Sidebar({
                                   </div>
                                   <p className="text-xs text-muted-foreground">
                                     {(() => {
-                                      const sessionCount = getAllSessions(project).length;
-                                      const hasMore = project.sessionMeta?.hasMore !== false;
-                                      const count = hasMore && sessionCount >= 5 ? `${sessionCount}+` : sessionCount;
-                                      return `${count} session${count === 1 ? '' : 's'}`;
+                                      const sessionCount = getSessionCount(project);
+                                      return `${sessionCount} session${sessionCount === 1 ? '' : 's'}`;
                                     })()}
                                   </p>
                                 </>
@@ -1034,6 +1329,23 @@ function Sidebar({
                       })}
                     >
                       <div className="flex items-center gap-3 min-w-0 flex-1">
+                        {/* Selection Checkbox */}
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            toggleProjectSelection(project.name);
+                          }}
+                          className={cn(
+                            "w-5 h-5 rounded border-2 flex items-center justify-center flex-shrink-0 transition-all duration-150",
+                            selectedProjects.has(project.name)
+                              ? "bg-primary border-primary"
+                              : "border-border hover:border-muted-foreground"
+                          )}
+                        >
+                          {selectedProjects.has(project.name) && (
+                            <Check className="w-3 h-3 text-primary-foreground" />
+                          )}
+                        </button>
                         {isExpanded ? (
                           <FolderOpen className="w-4 h-4 text-primary flex-shrink-0" />
                         ) : (
@@ -1064,11 +1376,7 @@ function Sidebar({
                                 {project.displayName}
                               </div>
                               <div className="text-xs text-muted-foreground">
-                                {(() => {
-                                  const sessionCount = getAllSessions(project).length;
-                                  const hasMore = project.sessionMeta?.hasMore !== false;
-                                  return hasMore && sessionCount >= 5 ? `${sessionCount}+` : sessionCount;
-                                })()}
+                                {getSessionCount(project)}
                                 {project.fullPath !== project.displayName && (
                                   <span className="ml-1 opacity-60" title={project.fullPath}>
                                     • {project.fullPath.length > 25 ? '...' + project.fullPath.slice(-22) : project.fullPath}
@@ -1159,6 +1467,30 @@ function Sidebar({
                   {/* Sessions List */}
                   {isExpanded && (
                     <div className="ml-3 space-y-1 border-l border-border pl-3">
+                      {/* New Session Button - at the top */}
+                      <div className="md:hidden px-0 pb-2">
+                        <button
+                          className="w-full h-8 bg-primary hover:bg-primary/90 text-primary-foreground rounded-md flex items-center justify-center gap-2 font-medium text-xs active:scale-[0.98] transition-all duration-150"
+                          onClick={() => {
+                            handleProjectSelect(project);
+                            onNewSession(project);
+                          }}
+                        >
+                          <Plus className="w-3 h-3" />
+                          {t('sessions.newSession')}
+                        </button>
+                      </div>
+
+                      <Button
+                        variant="default"
+                        size="sm"
+                        className="hidden md:flex w-full justify-start gap-2 mt-1 h-8 text-xs font-medium bg-primary hover:bg-primary/90 text-primary-foreground transition-colors"
+                        onClick={() => onNewSession(project)}
+                      >
+                        <Plus className="w-3 h-3" />
+                        {t('sessions.newSession')}
+                      </Button>
+
                       {!initialSessionsLoaded.has(project.name) ? (
                         // Loading skeleton for sessions
                         Array.from({ length: 3 }).map((_, i) => (
@@ -1411,57 +1743,39 @@ function Sidebar({
                         })
                       )}
 
-                      {/* Show More Sessions Button */}
+                      {/* Show More Sessions Button - Auto load on scroll */}
                       {getAllSessions(project).length > 0 && project.sessionMeta?.hasMore !== false && (
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          className="w-full justify-center gap-2 mt-2 text-muted-foreground"
-                          onClick={() => loadMoreSessions(project)}
-                          disabled={loadingSessions[project.name]}
-                        >
-                          {loadingSessions[project.name] ? (
-                            <>
-                              <div className="w-3 h-3 animate-spin rounded-full border border-muted-foreground border-t-transparent" />
-                              {t('sessions.loading')}
-                            </>
-                          ) : (
-                            <>
-                              <ChevronDown className="w-3 h-3" />
-                              {t('sessions.showMore')}
-                            </>
-                          )}
-                        </Button>
+                        <SessionLoadMoreButton
+                          project={project}
+                          loading={loadingSessions[project.name]}
+                          onLoadMore={() => loadMoreSessions(project)}
+                          t={t}
+                        />
                       )}
-                      
-                      {/* Sessions - New Session Button */}
-                      <div className="md:hidden px-3 pb-2">
-                        <button
-                          className="w-full h-8 bg-primary hover:bg-primary/90 text-primary-foreground rounded-md flex items-center justify-center gap-2 font-medium text-xs active:scale-[0.98] transition-all duration-150"
-                          onClick={() => {
-                            handleProjectSelect(project);
-                            onNewSession(project);
-                          }}
-                        >
-                          <Plus className="w-3 h-3" />
-                          {t('sessions.newSession')}
-                        </button>
-                      </div>
-                      
-                      <Button
-                        variant="default"
-                        size="sm"
-                        className="hidden md:flex w-full justify-start gap-2 mt-1 h-8 text-xs font-medium bg-primary hover:bg-primary/90 text-primary-foreground transition-colors"
-                        onClick={() => onNewSession(project)}
-                      >
-                        <Plus className="w-3 h-3" />
-                        {t('sessions.newSession')}
-                      </Button>
                     </div>
                   )}
                 </div>
               );
             })
+          )}
+
+          {/* Load more projects trigger */}
+          {hasMoreProjects && !isLoading && (
+            <div ref={loadMoreRef} className="py-3 flex justify-center">
+              {isLoadingMoreProjects ? (
+                <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                  <div className="w-4 h-4 animate-spin rounded-full border-2 border-muted-foreground border-t-transparent" />
+                  {t('projects.loadingMore', 'Loading more...')}
+                </div>
+              ) : (
+                <button
+                  onClick={onLoadMoreProjects}
+                  className="text-sm text-muted-foreground hover:text-foreground transition-colors px-4 py-2 rounded-md hover:bg-muted"
+                >
+                  {t('projects.loadMore', 'Load more projects')}
+                </button>
+              )}
+            </div>
           )}
         </div>
       </ScrollArea>

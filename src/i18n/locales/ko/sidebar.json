@@ -103,10 +103,18 @@
   "deleteConfirmation": {
     "deleteProject": "프로젝트 삭제",
     "deleteSession": "세션 삭제",
+    "batchDeleteProject": "프로젝트 일괄 삭제",
     "confirmDelete": "정말 삭제하시겠습니까",
+    "confirmBatchDelete": "{{count}}개의 프로젝트를 삭제하시겠습니까?",
     "sessionCount_one": "이 프로젝트에는 {{count}}개의 대화가 있습니다.",
     "sessionCount_other": "이 프로젝트에는 {{count}}개의 대화가 있습니다.",
     "allConversationsDeleted": "모든 대화가 영구적으로 삭제됩니다.",
-    "cannotUndo": "이 작업은 취소할 수 없습니다."
+    "sessionsPreserved": "연결된 세션은 유지됩니다.",
+    "cannotUndo": "이 작업은 취소할 수 없습니다.",
+    "andMore": "외 {{count}}개"
+  },
+  "batchSelect": {
+    "all": "전체 선택",
+    "deleteSelected": "삭제 ({{count}})"
   }
 }
