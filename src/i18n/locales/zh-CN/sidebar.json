@@ -115,6 +115,7 @@
   },
   "batchSelect": {
     "all": "全选",
+    "deselectAll": "取消全选",
     "deleteSelected": "删除 ({{count}})"
   }
 }

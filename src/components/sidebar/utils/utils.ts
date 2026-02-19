@@ -121,6 +121,21 @@ export const getProjectLastActivity = (
   project: Project,
   additionalSessions: AdditionalSessionsByProject,
 ): Date => {
+  // Prefer sessionMeta.lastActivity to avoid loading all sessions
+  if (project.sessionMeta?.lastActivity) {
+    const metaDate = new Date(project.sessionMeta.lastActivity as string | number);
+    const sessions = getAllSessions(project, additionalSessions);
+    if (sessions.length === 0) {
+      return metaDate;
+    }
+    // Compare with loaded sessions to get the most recent
+    const latestSession = sessions.reduce((latest, session) => {
+      const sessionDate = getSessionDate(session);
+      return sessionDate > latest ? sessionDate : latest;
+    }, new Date(0));
+    return latestSession > metaDate ? latestSession : metaDate;
+  }
+
   const sessions = getAllSessions(project, additionalSessions);
   if (sessions.length === 0) {
     return new Date(0);

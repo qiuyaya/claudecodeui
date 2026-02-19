@@ -35,6 +35,9 @@ function Sidebar({
   settingsInitialTab,
   onCloseSettings,
   isMobile,
+  hasMoreProjects,
+  isLoadingMoreProjects,
+  onLoadMoreProjects,
 }: SidebarProps) {
   const { t } = useTranslation(['sidebar', 'common']);
   const { isPWA } = useDeviceSettings({ trackMobile: false });
@@ -65,6 +68,8 @@ function Sidebar({
     sessionDeleteConfirmation,
     showVersionModal,
     filteredProjects,
+    selectedProjects,
+    batchDeleteConfirmation,
     handleTouchClick,
     toggleProject,
     handleSessionClick,
@@ -78,6 +83,10 @@ function Sidebar({
     confirmDeleteSession,
     requestProjectDelete,
     confirmDeleteProject,
+    toggleProjectSelection,
+    toggleSelectAll,
+    handleBatchDelete,
+    confirmBatchDelete,
     loadMoreSessions,
     handleProjectSelect,
     refreshProjects,
@@ -92,6 +101,7 @@ function Sidebar({
     setDeleteConfirmation,
     setSessionDeleteConfirmation,
     setShowVersionModal,
+    setBatchDeleteConfirmation,
   } = useSidebarController({
     projects,
     selectedProject,
@@ -145,6 +155,7 @@ function Sidebar({
     deletingProjects,
     tasksEnabled,
     mcpServerStatus,
+    selectedProjects,
     getProjectSessions,
     isProjectStarred,
     onEditingNameChange: setEditingName,
@@ -157,6 +168,9 @@ function Sidebar({
       void saveProjectName(projectName);
     },
     onDeleteProject: requestProjectDelete,
+    onToggleProjectSelection: toggleProjectSelection,
+    onToggleSelectAll: toggleSelectAll,
+    onBatchDelete: handleBatchDelete,
     onSessionSelect: handleSessionClick,
     onDeleteSession: showDeleteSessionConfirmation,
     onLoadMoreSessions: (project) => {
@@ -176,6 +190,9 @@ function Sidebar({
       void updateSessionSummary(projectName, sessionId, summary);
     },
     touchHandlerFactory: handleTouchClick,
+    hasMoreProjects,
+    isLoadingMoreProjects,
+    onLoadMoreProjects: () => { void onLoadMoreProjects(); },
     t,
   };
 
@@ -195,6 +212,9 @@ function Sidebar({
         sessionDeleteConfirmation={sessionDeleteConfirmation}
         onCancelDeleteSession={() => setSessionDeleteConfirmation(null)}
         onConfirmDeleteSession={confirmDeleteSession}
+        batchDeleteConfirmation={batchDeleteConfirmation}
+        onCancelBatchDelete={() => setBatchDeleteConfirmation(null)}
+        onConfirmBatchDelete={() => { void confirmBatchDelete(); }}
         showVersionModal={showVersionModal}
         onCloseVersionModal={() => setShowVersionModal(false)}
         releaseInfo={releaseInfo}

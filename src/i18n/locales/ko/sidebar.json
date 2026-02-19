@@ -115,6 +115,7 @@
   },
   "batchSelect": {
     "all": "전체 선택",
+    "deselectAll": "전체 선택 해제",
     "deleteSelected": "삭제 ({{count}})"
   }
 }

@@ -693,7 +693,7 @@ app.post('/api/system/update', authenticateToken, async (req, res) => {
 // Project list cache
 let projectsCache = null;
 let projectsCacheTime = 0;
-const PROJECTS_CACHE_TTL = 60 * 1000; // 1 minute
+const PROJECTS_CACHE_TTL = 5 * 60 * 1000; // 5 minutes
 let projectsCachePromise = null;
 
 async function getCachedProjects(progressCallback) {

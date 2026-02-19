@@ -115,6 +115,8 @@ export function useProjectsState({
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [isLoadingProjects, setIsLoadingProjects] = useState(true);
   const [loadingProgress, setLoadingProgress] = useState<LoadingProgress | null>(null);
+  const [hasMoreProjects, setHasMoreProjects] = useState(false);
+  const [isLoadingMoreProjects, setIsLoadingMoreProjects] = useState(false);
   const [isInputFocused, setIsInputFocused] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [settingsInitialTab, setSettingsInitialTab] = useState('agents');
@@ -122,27 +124,44 @@ export function useProjectsState({
 
   const loadingProgressTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  const PAGE_SIZE = 20;
+
   const fetchProjects = useCallback(async () => {
     try {
       setIsLoadingProjects(true);
-      const response = await api.projects();
-      const projectData = (await response.json()) as Project[];
+      const response = await api.projects(PAGE_SIZE, 0);
+      const data = (await response.json()) as
+        | Project[]
+        | { projects: Project[]; total: number; hasMore: boolean };
 
-      setProjects((prevProjects) => {
-        if (prevProjects.length === 0) {
-          return projectData;
-        }
+      const projectData = Array.isArray(data) ? data : data.projects;
+      const more = Array.isArray(data) ? false : data.hasMore;
 
-        return projectsHaveChanges(prevProjects, projectData, true)
-          ? projectData
-          : prevProjects;
-      });
+      setHasMoreProjects(more);
+      setProjects((prev) =>
+        prev.length === 0 ? projectData : projectsHaveChanges(prev, projectData, true) ? projectData : prev,
+      );
     } catch (error) {
       console.error('Error fetching projects:', error);
     } finally {
       setIsLoadingProjects(false);
     }
   }, []);
+
+  const loadMoreProjects = useCallback(async () => {
+    if (!hasMoreProjects || isLoadingMoreProjects) return;
+    setIsLoadingMoreProjects(true);
+    try {
+      const response = await api.projects(PAGE_SIZE, projects.length);
+      const data = (await response.json()) as { projects: Project[]; total: number; hasMore: boolean };
+      setHasMoreProjects(data.hasMore);
+      setProjects((prev) => [...prev, ...data.projects]);
+    } catch (error) {
+      console.error('Error loading more projects:', error);
+    } finally {
+      setIsLoadingMoreProjects(false);
+    }
+  }, [hasMoreProjects, isLoadingMoreProjects, projects.length]);
 
   const openSettings = useCallback((tab = 'tools') => {
     setSettingsInitialTab(tab);
@@ -401,8 +420,12 @@ export function useProjectsState({
 
   const handleSidebarRefresh = useCallback(async () => {
     try {
-      const response = await api.projects();
-      const freshProjects = (await response.json()) as Project[];
+      const response = await api.projects(PAGE_SIZE, 0);
+      const data = (await response.json()) as
+        | Project[]
+        | { projects: Project[]; total: number; hasMore: boolean };
+      const freshProjects = Array.isArray(data) ? data : data.projects;
+      setHasMoreProjects(Array.isArray(data) ? false : data.hasMore);
 
       setProjects((prevProjects) =>
         projectsHaveChanges(prevProjects, freshProjects, true) ? freshProjects : prevProjects,
@@ -476,6 +499,9 @@ export function useProjectsState({
       settingsInitialTab,
       onCloseSettings: () => setShowSettings(false),
       isMobile,
+      hasMoreProjects,
+      isLoadingMoreProjects,
+      onLoadMoreProjects: loadMoreProjects,
     }),
     [
       handleNewSession,
@@ -484,8 +510,11 @@ export function useProjectsState({
       handleSessionDelete,
       handleSessionSelect,
       handleSidebarRefresh,
+      hasMoreProjects,
+      isLoadingMoreProjects,
       isLoadingProjects,
       isMobile,
+      loadMoreProjects,
       loadingProgress,
       projects,
       settingsInitialTab,

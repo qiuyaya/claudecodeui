@@ -25,6 +25,9 @@ type SidebarModalsProps = {
   sessionDeleteConfirmation: SessionDeleteConfirmation | null;
   onCancelDeleteSession: () => void;
   onConfirmDeleteSession: () => void;
+  batchDeleteConfirmation: { projects: Project[]; isOpen: boolean } | null;
+  onCancelBatchDelete: () => void;
+  onConfirmBatchDelete: () => void;
   showVersionModal: boolean;
   onCloseVersionModal: () => void;
   releaseInfo: ReleaseInfo | null;
@@ -60,6 +63,9 @@ export default function SidebarModals({
   sessionDeleteConfirmation,
   onCancelDeleteSession,
   onConfirmDeleteSession,
+  batchDeleteConfirmation,
+  onCancelBatchDelete,
+  onConfirmBatchDelete,
   showVersionModal,
   onCloseVersionModal,
   releaseInfo,
@@ -183,6 +189,55 @@ export default function SidebarModals({
                   variant="destructive"
                   className="flex-1 bg-red-600 hover:bg-red-700 text-white"
                   onClick={onConfirmDeleteSession}
+                >
+                  <Trash2 className="w-4 h-4 mr-2" />
+                  {t('actions.delete')}
+                </Button>
+              </div>
+            </div>
+          </div>,
+          document.body,
+        )}
+
+      {batchDeleteConfirmation?.isOpen &&
+        ReactDOM.createPortal(
+          <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+            <div className="bg-card border border-border rounded-xl shadow-2xl max-w-md w-full overflow-hidden">
+              <div className="p-6">
+                <div className="flex items-start gap-4">
+                  <div className="w-12 h-12 rounded-full bg-red-100 dark:bg-red-900/30 flex items-center justify-center flex-shrink-0">
+                    <AlertTriangle className="w-6 h-6 text-red-600 dark:text-red-400" />
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <h3 className="text-lg font-semibold text-foreground mb-2">
+                      {t('deleteConfirmation.batchDeleteProject')}
+                    </h3>
+                    <p className="text-sm text-muted-foreground mb-1">
+                      {t('deleteConfirmation.confirmBatchDelete', {
+                        count: batchDeleteConfirmation.projects.length,
+                      })}
+                    </p>
+                    <div className="mt-3 max-h-32 overflow-y-auto space-y-1">
+                      {batchDeleteConfirmation.projects.map((p) => (
+                        <div key={p.name} className="text-xs text-muted-foreground truncate">
+                          {p.displayName || p.name}
+                        </div>
+                      ))}
+                    </div>
+                    <p className="text-xs text-muted-foreground mt-3">
+                      {t('deleteConfirmation.cannotUndo')}
+                    </p>
+                  </div>
+                </div>
+              </div>
+              <div className="flex gap-3 p-4 bg-muted/30 border-t border-border">
+                <Button variant="outline" className="flex-1" onClick={onCancelBatchDelete}>
+                  {t('actions.cancel')}
+                </Button>
+                <Button
+                  variant="destructive"
+                  className="flex-1 bg-red-600 hover:bg-red-700 text-white"
+                  onClick={onConfirmBatchDelete}
                 >
                   <Trash2 className="w-4 h-4 mr-2" />
                   {t('actions.delete')}

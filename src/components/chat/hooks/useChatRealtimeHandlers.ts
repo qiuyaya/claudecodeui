@@ -1,6 +1,6 @@
 import { useEffect, useRef } from 'react';
 import type { Dispatch, MutableRefObject, SetStateAction } from 'react';
-import { decodeHtmlEntities, formatUsageLimitText } from '../utils/chatFormatting';
+import { decodeHtmlEntities, formatUsageLimitText, stripAnsi } from '../utils/chatFormatting';
 import { safeLocalStorage } from '../utils/chatStorage';
 import type { ChatMessage, PendingPermissionRequest } from '../types/types';
 import type { Project, ProjectSession, SessionProvider } from '../../../types/app';
@@ -357,7 +357,7 @@ export function useChatRealtimeHandlers({
 
             if (part.type === 'text' && part.text?.trim()) {
               let content = decodeHtmlEntities(part.text);
-              content = formatUsageLimitText(content);
+              content = stripAnsi(formatUsageLimitText(content));
               setChatMessages((previous) => [
                 ...previous,
                 {
@@ -370,7 +370,7 @@ export function useChatRealtimeHandlers({
           });
         } else if (structuredMessageData && typeof structuredMessageData.content === 'string' && structuredMessageData.content.trim()) {
           let content = decodeHtmlEntities(structuredMessageData.content);
-          content = formatUsageLimitText(content);
+          content = stripAnsi(formatUsageLimitText(content));
           setChatMessages((previous) => [
             ...previous,
             {
@@ -393,7 +393,7 @@ export function useChatRealtimeHandlers({
                   return {
                     ...message,
                     toolResult: {
-                      content: part.content,
+                      content: typeof part.content === 'string' ? stripAnsi(part.content) : stripAnsi(JSON.stringify(part.content)),
                       isError: part.is_error,
                       timestamp: new Date(),
                     },
@@ -408,7 +408,7 @@ export function useChatRealtimeHandlers({
       }
 
       case 'claude-output': {
-        const cleaned = String(latestMessage.data || '');
+        const cleaned = stripAnsi(String(latestMessage.data || ''));
         if (cleaned.trim()) {
           streamBufferRef.current += streamBufferRef.current ? `\n${cleaned}` : cleaned;
           if (!streamTimerRef.current) {
@@ -718,7 +718,7 @@ export function useChatRealtimeHandlers({
                     isToolUse: true,
                     toolName: 'Bash',
                     toolInput: codexData.command,
-                    toolResult: codexData.output || null,
+                    toolResult: codexData.output ? { content: stripAnsi(codexData.output), isError: !!codexData.exitCode } : null,
                     exitCode: codexData.exitCode,
                   },
                 ]);
@@ -759,8 +759,10 @@ export function useChatRealtimeHandlers({
                   toolName: `${codexData.server}:${codexData.tool}`,
                   toolInput: JSON.stringify(codexData.arguments, null, 2),
                   toolResult: codexData.result
-                    ? JSON.stringify(codexData.result, null, 2)
-                    : codexData.error?.message || null,
+                    ? { content: stripAnsi(JSON.stringify(codexData.result, null, 2)), isError: false }
+                    : codexData.error?.message
+                      ? { content: stripAnsi(codexData.error.message), isError: true }
+                      : null,
                 },
               ]);
               break;

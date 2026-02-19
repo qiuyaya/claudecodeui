@@ -1,5 +1,6 @@
+import { memo } from 'react';
 import { Button } from '../../../ui/button';
-import { Check, ChevronDown, ChevronRight, Edit3, Folder, FolderOpen, Star, Trash2, X } from 'lucide-react';
+import { Check, CheckSquare, ChevronDown, ChevronRight, Edit3, Folder, FolderOpen, Square, Star, Trash2, X } from 'lucide-react';
 import type { TFunction } from 'i18next';
 import { cn } from '../../../../lib/utils';
 import TaskIndicator from '../../../TaskIndicator';
@@ -15,6 +16,7 @@ type SidebarProjectItemProps = {
   isExpanded: boolean;
   isDeleting: boolean;
   isStarred: boolean;
+  isSelectedForBatch: boolean;
   editingProject: string | null;
   editingName: string;
   sessions: SessionWithProvider[];
@@ -33,6 +35,7 @@ type SidebarProjectItemProps = {
   onCancelEditingProject: () => void;
   onSaveProjectName: (projectName: string) => void;
   onDeleteProject: (project: Project) => void;
+  onToggleProjectSelection: (projectName: string) => void;
   onSessionSelect: (session: SessionWithProvider, projectName: string) => void;
   onDeleteSession: (
     projectName: string,
@@ -50,22 +53,29 @@ type SidebarProjectItemProps = {
   t: TFunction;
 };
 
-const getSessionCountDisplay = (sessions: SessionWithProvider[], hasMoreSessions: boolean): string => {
-  const sessionCount = sessions.length;
-  if (hasMoreSessions && sessionCount >= 5) {
-    return `${sessionCount}+`;
-  }
-
-  return `${sessionCount}`;
+const getSessionCount = (sessions: SessionWithProvider[], sessionMetaTotal?: number): number => {
+  const claudeLoaded = sessions.filter((s) => s.__provider === 'claude').length;
+  const nonClaudeCount = sessions.length - claudeLoaded;
+  const claudeCount = Math.max(claudeLoaded, sessionMetaTotal || 0);
+  return claudeCount + nonClaudeCount;
 };
 
-export default function SidebarProjectItem({
+const getSessionCountDisplay = (count: number, hasMoreSessions: boolean): string => {
+  if (hasMoreSessions && count >= 5) {
+    return `${count}+`;
+  }
+
+  return `${count}`;
+};
+
+const SidebarProjectItem = memo(function SidebarProjectItem({
   project,
   selectedProject,
   selectedSession,
   isExpanded,
   isDeleting,
   isStarred,
+  isSelectedForBatch,
   editingProject,
   editingName,
   sessions,
@@ -84,6 +94,7 @@ export default function SidebarProjectItem({
   onCancelEditingProject,
   onSaveProjectName,
   onDeleteProject,
+  onToggleProjectSelection,
   onSessionSelect,
   onDeleteSession,
   onLoadMoreSessions,
@@ -98,8 +109,9 @@ export default function SidebarProjectItem({
   const isSelected = selectedProject?.name === project.name;
   const isEditing = editingProject === project.name;
   const hasMoreSessions = project.sessionMeta?.hasMore === true;
-  const sessionCountDisplay = getSessionCountDisplay(sessions, hasMoreSessions);
-  const sessionCountLabel = `${sessionCountDisplay} session${sessions.length === 1 ? '' : 's'}`;
+  const totalCount = getSessionCount(sessions, project.sessionMeta?.total);
+  const sessionCountDisplay = getSessionCountDisplay(totalCount, hasMoreSessions);
+  const sessionCountLabel = `${sessionCountDisplay} session${totalCount === 1 ? '' : 's'}`;
   const taskStatus = getTaskIndicatorStatus(project, mcpServerStatus);
 
   const toggleProject = () => onToggleProject(project.name);
@@ -283,6 +295,19 @@ export default function SidebarProjectItem({
           onClick={selectAndToggleProject}
         >
           <div className="flex items-center gap-3 min-w-0 flex-1">
+            <div
+              className="flex-shrink-0 cursor-pointer"
+              onClick={(event) => {
+                event.stopPropagation();
+                onToggleProjectSelection(project.name);
+              }}
+            >
+              {isSelectedForBatch ? (
+                <CheckSquare className="w-4 h-4 text-primary" />
+              ) : (
+                <Square className="w-4 h-4 text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity" />
+              )}
+            </div>
             {isExpanded ? (
               <FolderOpen className="w-4 h-4 text-primary flex-shrink-0" />
             ) : (
@@ -429,4 +454,6 @@ export default function SidebarProjectItem({
       />
     </div>
   );
-}
+});
+
+export default SidebarProjectItem;

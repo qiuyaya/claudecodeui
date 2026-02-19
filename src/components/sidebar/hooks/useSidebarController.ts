@@ -61,12 +61,17 @@ export function useSidebarController({
   const [additionalSessions, setAdditionalSessions] = useState<AdditionalSessionsByProject>({});
   const [initialSessionsLoaded, setInitialSessionsLoaded] = useState<Set<string>>(new Set());
   const [currentTime, setCurrentTime] = useState(new Date());
-  const [projectSortOrder, setProjectSortOrder] = useState<ProjectSortOrder>('name');
+  const [projectSortOrder, setProjectSortOrder] = useState<ProjectSortOrder>('date');
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [projectHasMoreOverrides, setProjectHasMoreOverrides] = useState<Record<string, boolean>>({});
   const [editingSession, setEditingSession] = useState<string | null>(null);
   const [editingSessionName, setEditingSessionName] = useState('');
   const [searchFilter, setSearchFilter] = useState('');
+  const [selectedProjects, setSelectedProjects] = useState<Set<string>>(new Set());
+  const [batchDeleteConfirmation, setBatchDeleteConfirmation] = useState<{
+    projects: Project[];
+    isOpen: boolean;
+  } | null>(null);
   const [deletingProjects, setDeletingProjects] = useState<Set<string>>(new Set());
   const [deleteConfirmation, setDeleteConfirmation] = useState<DeleteProjectConfirmation | null>(null);
   const [sessionDeleteConfirmation, setSessionDeleteConfirmation] = useState<SessionDeleteConfirmation | null>(null);
@@ -84,33 +89,19 @@ export function useSidebarController({
   }, []);
 
   useEffect(() => {
-    setAdditionalSessions({});
-    setInitialSessionsLoaded(new Set());
-    setProjectHasMoreOverrides({});
-  }, [projects]);
-
-  useEffect(() => {
-    if (selectedProject) {
-      setExpandedProjects((prev) => {
-        if (prev.has(selectedProject.name)) {
-          return prev;
-        }
-        const next = new Set(prev);
-        next.add(selectedProject.name);
-        return next;
-      });
-    }
-  }, [selectedSession, selectedProject]);
-
-  useEffect(() => {
     if (projects.length > 0 && !isLoading) {
       const loadedProjects = new Set<string>();
       projects.forEach((project) => {
-        if (project.sessions && project.sessions.length >= 0) {
+        if (project.sessions && project.sessions.length > 0) {
           loadedProjects.add(project.name);
         }
       });
-      setInitialSessionsLoaded(loadedProjects);
+      setInitialSessionsLoaded((prev) => {
+        // Merge with existing loaded state to avoid losing loaded sessions
+        const merged = new Set([...prev, ...loadedProjects]);
+        if (merged.size === prev.size) return prev;
+        return merged;
+      });
     }
   }, [projects, isLoading]);
 
@@ -156,15 +147,66 @@ export function useSidebarController({
     [],
   );
 
-  const toggleProject = useCallback((projectName: string) => {
-    setExpandedProjects((prev) => {
-      const next = new Set<string>();
-      if (!prev.has(projectName)) {
-        next.add(projectName);
+  const loadSessionsForProject = useCallback(
+    async (projectName: string) => {
+      setLoadingSessions((prev) => ({ ...prev, [projectName]: true }));
+      try {
+        const response = await api.sessions(projectName, 5, 0);
+        if (response.ok) {
+          const result = (await response.json()) as {
+            sessions?: ProjectSession[];
+            hasMore?: boolean;
+          };
+          setAdditionalSessions((prev) => ({
+            ...prev,
+            [projectName]: result.sessions || [],
+          }));
+          setInitialSessionsLoaded((prev) => new Set([...prev, projectName]));
+          if (result.hasMore === false) {
+            setProjectHasMoreOverrides((prev) => ({ ...prev, [projectName]: false }));
+          }
+        }
+      } catch (error) {
+        console.error(`Error loading sessions for ${projectName}:`, error);
+      } finally {
+        setLoadingSessions((prev) => ({ ...prev, [projectName]: false }));
       }
-      return next;
-    });
-  }, []);
+    },
+    [],
+  );
+
+  useEffect(() => {
+    if (selectedProject) {
+      setExpandedProjects((prev) => {
+        if (prev.has(selectedProject.name)) {
+          return prev;
+        }
+        const next = new Set(prev);
+        next.add(selectedProject.name);
+        return next;
+      });
+      if (!initialSessionsLoaded.has(selectedProject.name)) {
+        void loadSessionsForProject(selectedProject.name);
+      }
+    }
+  }, [selectedSession, selectedProject, initialSessionsLoaded, loadSessionsForProject]);
+
+  const toggleProject = useCallback(
+    (projectName: string) => {
+      setExpandedProjects((prev) => {
+        const next = new Set<string>();
+        if (!prev.has(projectName)) {
+          next.add(projectName);
+          // Load sessions on demand when expanding
+          if (!initialSessionsLoaded.has(projectName)) {
+            void loadSessionsForProject(projectName);
+          }
+        }
+        return next;
+      });
+    },
+    [initialSessionsLoaded, loadSessionsForProject],
+  );
 
   const handleSessionClick = useCallback(
     (session: SessionWithProvider, projectName: string) => {
@@ -340,6 +382,72 @@ export function useSidebarController({
     }
   }, [deleteConfirmation, onProjectDelete, t]);
 
+  const toggleProjectSelection = useCallback((projectName: string) => {
+    setSelectedProjects((prev) => {
+      const next = new Set(prev);
+      if (next.has(projectName)) {
+        next.delete(projectName);
+      } else {
+        next.add(projectName);
+      }
+      return next;
+    });
+  }, []);
+
+  const toggleSelectAll = useCallback(() => {
+    setSelectedProjects((prev) => {
+      if (prev.size === filteredProjects.length) {
+        return new Set();
+      }
+      return new Set(filteredProjects.map((p) => p.name));
+    });
+  }, [filteredProjects]);
+
+  const handleBatchDelete = useCallback(() => {
+    const selectedProjectsList = filteredProjects.filter((p) => selectedProjects.has(p.name));
+    setBatchDeleteConfirmation({ projects: selectedProjectsList, isOpen: true });
+  }, [filteredProjects, selectedProjects]);
+
+  const confirmBatchDelete = useCallback(async () => {
+    if (!batchDeleteConfirmation) return;
+
+    const projectsToDelete = batchDeleteConfirmation.projects;
+    setBatchDeleteConfirmation(null);
+
+    setDeletingProjects((prev) => new Set([...prev, ...projectsToDelete.map((p) => p.name)]));
+
+    const deletedProjectNames: string[] = [];
+
+    for (const project of projectsToDelete) {
+      try {
+        const response = await api.deleteProject(project.name, false, true);
+
+        if (response.ok) {
+          deletedProjectNames.push(project.name);
+        } else {
+          const error = (await response.json()) as { error?: string };
+          console.error(`Failed to delete project ${project.name}:`, error);
+        }
+      } catch (error) {
+        console.error(`Error deleting project ${project.name}:`, error);
+      } finally {
+        setDeletingProjects((prev) => {
+          const next = new Set(prev);
+          next.delete(project.name);
+          return next;
+        });
+      }
+    }
+
+    if (deletedProjectNames.length > 0) {
+      for (const name of deletedProjectNames) {
+        onProjectDelete?.(name);
+      }
+    }
+
+    setSelectedProjects(new Set());
+  }, [batchDeleteConfirmation, onProjectDelete]);
+
   const loadMoreSessions = useCallback(
     async (project: Project) => {
       const hasMoreOverride = projectHasMoreOverrides[project.name];
@@ -438,6 +546,8 @@ export function useSidebarController({
     showVersionModal,
     starredProjects,
     filteredProjects,
+    selectedProjects,
+    batchDeleteConfirmation,
     handleTouchClick,
     toggleProject,
     handleSessionClick,
@@ -451,6 +561,10 @@ export function useSidebarController({
     confirmDeleteSession,
     requestProjectDelete,
     confirmDeleteProject,
+    toggleProjectSelection,
+    toggleSelectAll,
+    handleBatchDelete,
+    confirmBatchDelete,
     loadMoreSessions,
     handleProjectSelect,
     refreshProjects,
@@ -465,5 +579,6 @@ export function useSidebarController({
     setDeleteConfirmation,
     setSessionDeleteConfirmation,
     setShowVersionModal,
+    setBatchDeleteConfirmation,
   };
 }

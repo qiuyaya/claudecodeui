@@ -8,7 +8,7 @@ import type {
   Provider,
 } from '../../types/types';
 import { Markdown } from './Markdown';
-import { formatUsageLimitText } from '../../utils/chatFormatting';
+import { formatUsageLimitText, stripAnsi } from '../../utils/chatFormatting';
 import { getClaudePermissionSuggestion } from '../../utils/chatPermissions';
 import type { Project } from '../../../../types/app';
 import { ToolRenderer, shouldHideToolResult } from '../../tools';
@@ -166,7 +166,7 @@ const MessageComponent = memo(({ message, index, prevMessage, createDiff, onFile
                 <div className="flex flex-col">
                   <div className="flex flex-col">
                     <Markdown className="prose prose-sm max-w-none dark:prose-invert">
-                      {String(message.displayText || '')}
+                      {stripAnsi(String(message.displayText || ''))}
                     </Markdown>
                   </div>
                 </div>
@@ -203,7 +203,7 @@ const MessageComponent = memo(({ message, index, prevMessage, createDiff, onFile
                       </div>
                       <div className="relative text-sm text-red-900 dark:text-red-100">
                         <Markdown className="prose prose-sm max-w-none prose-red dark:prose-invert">
-                          {String(message.toolResult.content || '')}
+                          {stripAnsi(String(message.toolResult.content || ''))}
                         </Markdown>
                         {permissionSuggestion && (
                           <div className="mt-4 border-t border-red-200/60 dark:border-red-800/60 pt-3">
@@ -392,7 +392,7 @@ const MessageComponent = memo(({ message, index, prevMessage, createDiff, onFile
                 )}
 
                 {(() => {
-                  const content = formatUsageLimitText(String(message.content || ''));
+                  const content = stripAnsi(formatUsageLimitText(String(message.content || '')));
 
                   // Detect if content is pure JSON (starts with { or [)
                   const trimmedContent = content.trim();

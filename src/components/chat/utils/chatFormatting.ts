@@ -42,6 +42,22 @@ export function unescapeWithMathProtection(text: string) {
   return processedText;
 }
 
+// eslint-disable-next-line no-control-regex
+const ansiRegex = /[\u001b\u009b][[\]()#;?]*(?:(?:(?:(?:;[-a-zA-Z\d/#&.:=?%@~_]+)*|[a-zA-Z\d]+(?:;[-a-zA-Z\d/#&.:=?%@~_]*)*)?\u0007)|(?:(?:\d{1,4}(?:;\d{0,4})*)?[\dA-PR-TZcf-nq-uy=><~]))/g;
+
+// Matches orphaned ANSI-like CSI sequences where the ESC character was already stripped,
+// e.g. "[1m", "[0;32m", "[2K", "[?25h".  Only fire when preceded by start-of-string or
+// a non-letter character so we don't eat legitimate prose.
+const orphanedAnsiRegex = /(?:^|(?<=\s|[^a-zA-Z]))\[(?:\??\d{1,4}(?:;\d{0,4})*)?[A-PR-TZcf-nq-uy=><~mK]/g;
+
+export function stripAnsi(text: string): string {
+  if (!text || typeof text !== 'string') return text;
+  return text
+    .replace(ansiRegex, '')
+    .replace(orphanedAnsiRegex, '')
+    .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F]/g, '');
+}
+
 export function escapeRegExp(value: string) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }

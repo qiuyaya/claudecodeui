@@ -420,19 +420,20 @@ async function getProjects(progressCallback = null) {
           sessions: []
         };
 
-        // Run session and detection queries in parallel (lightweight meta only)
-        const [sessionMeta, cursorSessions, codexSessions, taskMasterResult] = await Promise.allSettled([
-          getSessionsMeta(entry.name),
+        // Run session and detection queries in parallel (load first 5 sessions for accurate count)
+        const [sessionsResult, cursorSessions, codexSessions, taskMasterResult] = await Promise.allSettled([
+          getSessions(entry.name, 5, 0),
           getCursorSessions(actualProjectDir),
           getCodexSessions(actualProjectDir),
           detectTaskMasterFolder(actualProjectDir)
         ]);
 
-        if (sessionMeta.status === 'fulfilled') {
+        if (sessionsResult.status === 'fulfilled') {
+          project.sessions = sessionsResult.value.sessions || [];
           project.sessionMeta = {
-            hasMore: sessionMeta.value.total > 0,
-            total: sessionMeta.value.total,
-            lastActivity: sessionMeta.value.lastActivity
+            hasMore: sessionsResult.value.hasMore || false,
+            total: sessionsResult.value.total || 0,
+            lastActivity: project.sessions.length > 0 ? project.sessions[0].lastActivity : null
           };
         }
 

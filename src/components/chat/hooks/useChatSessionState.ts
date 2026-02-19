@@ -316,9 +316,11 @@ export function useChatSessionState({
     }
 
     pendingInitialScrollRef.current = false;
-    setTimeout(() => {
-      scrollToBottom();
-    }, 200);
+    if (autoScrollToBottom !== false) {
+      setTimeout(() => {
+        scrollToBottom();
+      }, 200);
+    }
   }, [chatMessages.length, isLoadingSessionMessages, scrollToBottom]);
 
   useEffect(() => {
@@ -455,6 +457,13 @@ export function useChatSessionState({
           return;
         }
 
+        // If user has loaded older messages by scrolling up, avoid replacing
+        // the accumulated history with just the first page.
+        const hasLoadedOlderMessages = messagesOffsetRef.current > MESSAGES_PER_PAGE;
+        if (hasLoadedOlderMessages) {
+          return;
+        }
+
         const messages = await loadSessionMessages(
           selectedProject.name,
           selectedSession.id,
@@ -564,15 +573,9 @@ export function useChatSessionState({
       return;
     }
 
+    // Auto-scroll disabled: keep viewport at the same position
     const container = scrollContainerRef.current;
-    const prevHeight = scrollPositionRef.current.height;
-    const prevTop = scrollPositionRef.current.top;
-    const newHeight = container.scrollHeight;
-    const heightDiff = newHeight - prevHeight;
-
-    if (heightDiff > 0 && prevTop > 0) {
-      container.scrollTop = prevTop + heightDiff;
-    }
+    container.scrollTop = scrollPositionRef.current.top;
   }, [autoScrollToBottom, chatMessages.length, isLoadingMoreMessages, isUserScrolledUp, scrollToBottom]);
 
   useEffect(() => {

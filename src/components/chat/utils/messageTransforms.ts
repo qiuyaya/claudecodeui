@@ -1,5 +1,5 @@
 import type { ChatMessage } from '../types/types';
-import { decodeHtmlEntities, unescapeWithMathProtection } from './chatFormatting';
+import { decodeHtmlEntities, stripAnsi, unescapeWithMathProtection } from './chatFormatting';
 
 export interface DiffLine {
   type: 'added' | 'removed';
@@ -151,7 +151,7 @@ export const convertCursorSessionMessages = (blobs: CursorBlob[], projectPath: s
 
             if (toolCallId && toolUseMap[toolCallId]) {
               toolUseMap[toolCallId].toolResult = {
-                content: result,
+                content: stripAnsi(result),
                 isError: false,
               };
             } else {
@@ -167,7 +167,7 @@ export const convertCursorSessionMessages = (blobs: CursorBlob[], projectPath: s
                 toolId: toolCallId,
                 toolInput: normalizeToolInput(null),
                 toolResult: {
-                  content: result,
+                  content: stripAnsi(result),
                   isError: false,
                 },
               });
@@ -457,7 +457,7 @@ export const convertSessionMessages = (rawMessages: any[]): ChatMessage[] => {
         }
         if (!message.toolCallId || convertedMessage.toolCallId === message.toolCallId) {
           convertedMessage.toolResult = {
-            content: message.output || '',
+            content: stripAnsi(message.output || ''),
             isError: false,
           };
           break;
@@ -472,7 +472,7 @@ export const convertSessionMessages = (rawMessages: any[]): ChatMessage[] => {
           if (part.type === 'text') {
             let text = part.text;
             if (typeof text === 'string') {
-              text = unescapeWithMathProtection(text);
+              text = stripAnsi(unescapeWithMathProtection(text));
             }
             converted.push({
               type: 'assistant',
@@ -495,8 +495,8 @@ export const convertSessionMessages = (rawMessages: any[]): ChatMessage[] => {
                 ? {
                     content:
                       typeof toolResult.content === 'string'
-                        ? toolResult.content
-                        : JSON.stringify(toolResult.content),
+                        ? stripAnsi(toolResult.content)
+                        : stripAnsi(JSON.stringify(toolResult.content)),
                     isError: toolResult.isError,
                     toolUseResult: toolResult.toolUseResult,
                   }
@@ -512,7 +512,7 @@ export const convertSessionMessages = (rawMessages: any[]): ChatMessage[] => {
       if (typeof message.message.content === 'string') {
         converted.push({
           type: 'assistant',
-          content: unescapeWithMathProtection(message.message.content),
+          content: stripAnsi(unescapeWithMathProtection(message.message.content)),
           timestamp: message.timestamp || new Date().toISOString(),
         });
       }

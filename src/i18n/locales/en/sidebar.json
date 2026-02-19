@@ -115,6 +115,7 @@
   },
   "batchSelect": {
     "all": "Select all",
+    "deselectAll": "Deselect all",
     "deleteSelected": "Delete ({{count}})"
   }
 }

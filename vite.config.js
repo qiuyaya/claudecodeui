@@ -24,6 +24,7 @@ export default defineConfig(({ command, mode }) => {
     },
     build: {
       outDir: 'dist',
+      sourcemap: false,
       chunkSizeWarningLimit: 1000,
       rollupOptions: {
         output: {
@@ -39,7 +40,8 @@ export default defineConfig(({ command, mode }) => {
               '@codemirror/lang-python',
               '@codemirror/theme-one-dark'
             ],
-            'vendor-xterm': ['@xterm/xterm', '@xterm/addon-fit', '@xterm/addon-clipboard', '@xterm/addon-webgl']
+            'vendor-xterm': ['@xterm/xterm', '@xterm/addon-fit', '@xterm/addon-clipboard', '@xterm/addon-webgl'],
+            'vendor-markdown': ['react-markdown', 'remark-gfm', 'remark-math', 'rehype-katex', 'react-syntax-highlighter']
           }
         }
       }

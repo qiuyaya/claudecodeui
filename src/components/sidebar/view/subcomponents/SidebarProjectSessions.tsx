@@ -1,3 +1,4 @@
+import { memo, useEffect, useRef } from 'react';
 import { ChevronDown, Plus } from 'lucide-react';
 import type { TFunction } from 'i18next';
 import { Button } from '../../../ui/button';
@@ -51,7 +52,61 @@ function SessionListSkeleton() {
   );
 }
 
-export default function SidebarProjectSessions({
+function SessionLoadMoreButton({
+  project,
+  isLoadingSessions,
+  onLoadMoreSessions,
+  t,
+}: {
+  project: Project;
+  isLoadingSessions: boolean;
+  onLoadMoreSessions: (project: Project) => void;
+  t: TFunction;
+}) {
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const element = ref.current;
+    if (!element) return;
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries[0].isIntersecting && !isLoadingSessions) {
+          onLoadMoreSessions(project);
+        }
+      },
+      { threshold: 0.1, rootMargin: '50px' },
+    );
+
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [isLoadingSessions, onLoadMoreSessions, project]);
+
+  return (
+    <div ref={ref}>
+      <Button
+        variant="ghost"
+        size="sm"
+        className="w-full justify-center gap-2 mt-2 text-muted-foreground"
+        disabled={isLoadingSessions}
+      >
+        {isLoadingSessions ? (
+          <>
+            <div className="w-3 h-3 animate-spin rounded-full border border-muted-foreground border-t-transparent" />
+            {t('sessions.loading')}
+          </>
+        ) : (
+          <>
+            <ChevronDown className="w-3 h-3" />
+            {t('sessions.showMore')}
+          </>
+        )}
+      </Button>
+    </div>
+  );
+}
+
+const SidebarProjectSessions = memo(function SidebarProjectSessions({
   project,
   isExpanded,
   sessions,
@@ -82,6 +137,31 @@ export default function SidebarProjectSessions({
 
   return (
     <div className="ml-3 space-y-1 border-l border-border pl-3">
+      {/* New Session Button - Desktop (Top) */}
+      <Button
+        variant="default"
+        size="sm"
+        className="hidden md:flex w-full justify-start gap-2 mb-1 h-8 text-xs font-medium bg-primary hover:bg-primary/90 text-primary-foreground transition-colors"
+        onClick={() => onNewSession(project)}
+      >
+        <Plus className="w-3 h-3" />
+        {t('sessions.newSession')}
+      </Button>
+
+      {/* New Session Button - Mobile (Top) */}
+      <div className="md:hidden px-3 pb-2">
+        <button
+          className="w-full h-8 bg-primary hover:bg-primary/90 text-primary-foreground rounded-md flex items-center justify-center gap-2 font-medium text-xs active:scale-[0.98] transition-all duration-150"
+          onClick={() => {
+            onProjectSelect(project);
+            onNewSession(project);
+          }}
+        >
+          <Plus className="w-3 h-3" />
+          {t('sessions.newSession')}
+        </button>
+      </div>
+
       {!initialSessionsLoaded ? (
         <SessionListSkeleton />
       ) : !hasSessions && !isLoadingSessions ? (
@@ -112,49 +192,15 @@ export default function SidebarProjectSessions({
       )}
 
       {hasSessions && hasMoreSessions && (
-        <Button
-          variant="ghost"
-          size="sm"
-          className="w-full justify-center gap-2 mt-2 text-muted-foreground"
-          onClick={() => onLoadMoreSessions(project)}
-          disabled={isLoadingSessions}
-        >
-          {isLoadingSessions ? (
-            <>
-              <div className="w-3 h-3 animate-spin rounded-full border border-muted-foreground border-t-transparent" />
-              {t('sessions.loading')}
-            </>
-          ) : (
-            <>
-              <ChevronDown className="w-3 h-3" />
-              {t('sessions.showMore')}
-            </>
-          )}
-        </Button>
+        <SessionLoadMoreButton
+          project={project}
+          isLoadingSessions={isLoadingSessions}
+          onLoadMoreSessions={onLoadMoreSessions}
+          t={t}
+        />
       )}
-
-      <div className="md:hidden px-3 pb-2">
-        <button
-          className="w-full h-8 bg-primary hover:bg-primary/90 text-primary-foreground rounded-md flex items-center justify-center gap-2 font-medium text-xs active:scale-[0.98] transition-all duration-150"
-          onClick={() => {
-            onProjectSelect(project);
-            onNewSession(project);
-          }}
-        >
-          <Plus className="w-3 h-3" />
-          {t('sessions.newSession')}
-        </button>
-      </div>
-
-      <Button
-        variant="default"
-        size="sm"
-        className="hidden md:flex w-full justify-start gap-2 mt-1 h-8 text-xs font-medium bg-primary hover:bg-primary/90 text-primary-foreground transition-colors"
-        onClick={() => onNewSession(project)}
-      >
-        <Plus className="w-3 h-3" />
-        {t('sessions.newSession')}
-      </Button>
     </div>
   );
-}
+});
+
+export default SidebarProjectSessions;

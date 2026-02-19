@@ -39,6 +39,9 @@ export type SidebarProps = {
   settingsInitialTab: string;
   onCloseSettings: () => void;
   isMobile: boolean;
+  hasMoreProjects: boolean;
+  isLoadingMoreProjects: boolean;
+  onLoadMoreProjects: () => void;
 };
 
 export type SessionViewModel = {
