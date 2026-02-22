@@ -133,7 +133,7 @@ const useWebSocketProviderState = (): WebSocketContextType => {
 
   const value: WebSocketContextType = useMemo(() =>
   ({
-    ws: wsRef.current,
+    ws: isConnected ? wsRef.current : null,
     sendMessage,
     latestMessage,
     isConnected

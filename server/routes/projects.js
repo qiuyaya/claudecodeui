@@ -1,9 +1,11 @@
 import express from 'express';
 import { promises as fs } from 'fs';
+import fsSync from 'fs';
 import path from 'path';
 import { spawn } from 'child_process';
 import os from 'os';
-import { addProjectManually } from '../projects.js';
+import mime from 'mime-types';
+import { addProjectManually, getSessions, getSessionMessages, renameProject, deleteSession, deleteProject, extractProjectDirectory } from '../projects.js';
 
 const router = express.Router();
 
@@ -172,7 +174,7 @@ export async function validateWorkspacePath(requestedPath) {
  * - githubTokenId?: number (optional, ID of stored token)
  * - newGithubToken?: string (optional, one-time token)
  */
-router.post('/create-workspace', async (req, res) => {
+router.post('/create-workspace', async (req, res, next) => {
   try {
     const { workspaceType, path: workspacePath, githubUrl, githubTokenId, newGithubToken } = req.body;
 
@@ -299,11 +301,7 @@ router.post('/create-workspace', async (req, res) => {
     }
 
   } catch (error) {
-    console.error('Error creating workspace:', error);
-    res.status(500).json({
-      error: error.message || 'Failed to create workspace',
-      details: process.env.NODE_ENV === 'development' ? error.stack : undefined
-    });
+    next(error);
   }
 });
 
@@ -546,5 +544,424 @@ function cloneGitHubRepository(githubUrl, destinationPath, githubToken = null) {
     });
   });
 }
+
+// ── Project CRUD Routes ──
+
+// Get projects list
+router.get('/', async (req, res, next) => {
+    try {
+        const limit = parseInt(req.query.limit) || 0;
+        const offset = parseInt(req.query.offset) || 0;
+        const refresh = req.query.refresh === 'true';
+
+        const { getCachedProjects, broadcastProgress } = req.app.locals;
+        if (refresh) {
+          req.app.locals.clearProjectsCache();
+        }
+
+        const projects = await getCachedProjects(broadcastProgress);
+
+        if (limit > 0) {
+          const paged = projects.slice(offset, offset + limit);
+          res.json({
+            projects: paged,
+            total: projects.length,
+            hasMore: offset + limit < projects.length
+          });
+        } else {
+          res.json(projects);
+        }
+    } catch (error) {
+        next(error);
+    }
+});
+
+// Get sessions for a project
+router.get('/:projectName/sessions', async (req, res, next) => {
+    try {
+        const { limit = 5, offset = 0 } = req.query;
+        const result = await getSessions(req.params.projectName, parseInt(limit), parseInt(offset));
+        res.json(result);
+    } catch (error) {
+        next(error);
+    }
+});
+
+// Get messages for a specific session
+router.get('/:projectName/sessions/:sessionId/messages', async (req, res, next) => {
+    try {
+        const { projectName, sessionId } = req.params;
+        const { limit, offset } = req.query;
+
+        const parsedLimit = limit ? parseInt(limit, 10) : null;
+        const parsedOffset = offset ? parseInt(offset, 10) : 0;
+
+        const result = await getSessionMessages(projectName, sessionId, parsedLimit, parsedOffset);
+
+        if (Array.isArray(result)) {
+            res.json({ messages: result });
+        } else {
+            res.json(result);
+        }
+    } catch (error) {
+        next(error);
+    }
+});
+
+// Rename project
+router.put('/:projectName/rename', async (req, res, next) => {
+    try {
+        const { displayName } = req.body;
+        await renameProject(req.params.projectName, displayName);
+        res.json({ success: true });
+    } catch (error) {
+        next(error);
+    }
+});
+
+// Delete session
+router.delete('/:projectName/sessions/:sessionId', async (req, res, next) => {
+    try {
+        const { projectName, sessionId } = req.params;
+        await deleteSession(projectName, sessionId);
+        res.json({ success: true });
+    } catch (error) {
+        next(error);
+    }
+});
+
+// Delete project
+router.delete('/:projectName', async (req, res, next) => {
+    try {
+        const { projectName } = req.params;
+        const force = req.query.force === 'true';
+        const preserveSessions = req.query.preserveSessions === 'true';
+        await deleteProject(projectName, force, preserveSessions);
+        res.json({ success: true });
+    } catch (error) {
+        next(error);
+    }
+});
+
+// Create project
+router.post('/create', async (req, res, next) => {
+    try {
+        const { path: projectPath } = req.body;
+
+        if (!projectPath || !projectPath.trim()) {
+            return res.status(400).json({ error: 'Project path is required' });
+        }
+
+        const project = await addProjectManually(projectPath.trim());
+        res.json({ success: true, project });
+    } catch (error) {
+        next(error);
+    }
+});
+
+// ── File Operations ──
+
+// Read file content
+router.get('/:projectName/file', async (req, res, next) => {
+    try {
+        const { projectName } = req.params;
+        const { filePath } = req.query;
+
+        if (!filePath) {
+            return res.status(400).json({ error: 'Invalid file path' });
+        }
+
+        const projectRoot = await extractProjectDirectory(projectName).catch(() => null);
+        if (!projectRoot) {
+            return res.status(404).json({ error: 'Project not found' });
+        }
+
+        const resolved = path.isAbsolute(filePath)
+            ? path.resolve(filePath)
+            : path.resolve(projectRoot, filePath);
+        const normalizedRoot = path.resolve(projectRoot) + path.sep;
+        if (!resolved.startsWith(normalizedRoot)) {
+            return res.status(403).json({ error: 'Path must be under project root' });
+        }
+
+        const content = await fs.readFile(resolved, 'utf8');
+        res.json({ content, path: resolved });
+    } catch (error) {
+        if (error.code === 'ENOENT') {
+            res.status(404).json({ error: 'File not found' });
+        } else if (error.code === 'EACCES') {
+            res.status(403).json({ error: 'Permission denied' });
+        } else {
+            next(error);
+        }
+    }
+});
+
+// Serve binary file content (images, etc.)
+router.get('/:projectName/files/content', async (req, res, next) => {
+    try {
+        const { projectName } = req.params;
+        const { path: filePath } = req.query;
+
+        if (!filePath) {
+            return res.status(400).json({ error: 'Invalid file path' });
+        }
+
+        const projectRoot = await extractProjectDirectory(projectName).catch(() => null);
+        if (!projectRoot) {
+            return res.status(404).json({ error: 'Project not found' });
+        }
+
+        const resolved = path.resolve(filePath);
+        const normalizedRoot = path.resolve(projectRoot) + path.sep;
+        if (!resolved.startsWith(normalizedRoot)) {
+            return res.status(403).json({ error: 'Path must be under project root' });
+        }
+
+        try {
+            await fs.access(resolved);
+        } catch (error) {
+            return res.status(404).json({ error: 'File not found' });
+        }
+
+        const mimeType = mime.lookup(resolved) || 'application/octet-stream';
+        res.setHeader('Content-Type', mimeType);
+
+        const fileStream = fsSync.createReadStream(resolved);
+        fileStream.pipe(res);
+
+        fileStream.on('error', (error) => {
+            if (!res.headersSent) {
+                next(error);
+            }
+        });
+
+    } catch (error) {
+        if (!res.headersSent) {
+            next(error);
+        }
+    }
+});
+
+// Save file content
+router.put('/:projectName/file', async (req, res, next) => {
+    try {
+        const { projectName } = req.params;
+        const { filePath, content } = req.body;
+
+        if (!filePath) {
+            return res.status(400).json({ error: 'Invalid file path' });
+        }
+
+        if (content === undefined) {
+            return res.status(400).json({ error: 'Content is required' });
+        }
+
+        const projectRoot = await extractProjectDirectory(projectName).catch(() => null);
+        if (!projectRoot) {
+            return res.status(404).json({ error: 'Project not found' });
+        }
+
+        const resolved = path.isAbsolute(filePath)
+            ? path.resolve(filePath)
+            : path.resolve(projectRoot, filePath);
+        const normalizedRoot = path.resolve(projectRoot) + path.sep;
+        if (!resolved.startsWith(normalizedRoot)) {
+            return res.status(403).json({ error: 'Path must be under project root' });
+        }
+
+        await fs.writeFile(resolved, content, 'utf8');
+
+        res.json({
+            success: true,
+            path: resolved,
+            message: 'File saved successfully'
+        });
+    } catch (error) {
+        if (error.code === 'ENOENT') {
+            res.status(404).json({ error: 'File or directory not found' });
+        } else if (error.code === 'EACCES') {
+            res.status(403).json({ error: 'Permission denied' });
+        } else {
+            next(error);
+        }
+    }
+});
+
+// Get file tree for a project
+router.get('/:projectName/files', async (req, res, next) => {
+    try {
+        let actualPath;
+        try {
+            actualPath = await extractProjectDirectory(req.params.projectName);
+        } catch (error) {
+            actualPath = req.params.projectName.replace(/-/g, '/');
+        }
+
+        try {
+            await fs.access(actualPath);
+        } catch (e) {
+            return res.status(404).json({ error: `Project path not found: ${actualPath}` });
+        }
+
+        const { getFileTree } = req.app.locals;
+        const files = await getFileTree(actualPath, 10, 0, true);
+        res.json(files);
+    } catch (error) {
+        next(error);
+    }
+});
+
+// Get token usage for a specific session
+router.get('/:projectName/sessions/:sessionId/token-usage', async (req, res, next) => {
+  try {
+    const { projectName, sessionId } = req.params;
+    const { provider = 'claude' } = req.query;
+    const homeDir = os.homedir();
+
+    const safeSessionId = String(sessionId).replace(/[^a-zA-Z0-9._-]/g, '');
+    if (!safeSessionId) {
+      return res.status(400).json({ error: 'Invalid sessionId' });
+    }
+
+    if (provider === 'cursor') {
+      return res.json({
+        used: 0,
+        total: 0,
+        breakdown: { input: 0, cacheCreation: 0, cacheRead: 0 },
+        unsupported: true,
+        message: 'Token usage tracking not available for Cursor sessions'
+      });
+    }
+
+    if (provider === 'codex') {
+      const codexSessionsDir = path.join(homeDir, '.codex', 'sessions');
+
+      const findSessionFile = async (dir) => {
+        try {
+          const entries = await fs.readdir(dir, { withFileTypes: true });
+          for (const entry of entries) {
+            const fullPath = path.join(dir, entry.name);
+            if (entry.isDirectory()) {
+              const found = await findSessionFile(fullPath);
+              if (found) return found;
+            } else if (entry.name.includes(safeSessionId) && entry.name.endsWith('.jsonl')) {
+              return fullPath;
+            }
+          }
+        } catch (error) {
+          // Skip directories we can't read
+        }
+        return null;
+      };
+
+      const sessionFilePath = await findSessionFile(codexSessionsDir);
+
+      if (!sessionFilePath) {
+        return res.status(404).json({ error: 'Codex session file not found', sessionId: safeSessionId });
+      }
+
+      let fileContent;
+      try {
+        fileContent = await fs.readFile(sessionFilePath, 'utf8');
+      } catch (error) {
+        if (error.code === 'ENOENT') {
+          return res.status(404).json({ error: 'Session file not found' });
+        }
+        throw error;
+      }
+      const lines = fileContent.trim().split('\n');
+      let totalTokens = 0;
+      let contextWindow = 200000;
+
+      for (let i = lines.length - 1; i >= 0; i--) {
+        try {
+          const entry = JSON.parse(lines[i]);
+          if (entry.type === 'event_msg' && entry.payload?.type === 'token_count' && entry.payload?.info) {
+            const tokenInfo = entry.payload.info;
+            if (tokenInfo.total_token_usage) {
+              totalTokens = tokenInfo.total_token_usage.total_tokens || 0;
+            }
+            if (tokenInfo.model_context_window) {
+              contextWindow = tokenInfo.model_context_window;
+            }
+            break;
+          }
+        } catch (parseError) {
+          continue;
+        }
+      }
+
+      return res.json({
+        used: totalTokens,
+        total: contextWindow
+      });
+    }
+
+    // Handle Claude sessions (default)
+    let projectPath;
+    try {
+      projectPath = await extractProjectDirectory(projectName);
+    } catch (error) {
+      return res.status(500).json({ error: 'Failed to determine project path' });
+    }
+
+    const encodedPath = projectPath.replace(/[\\/:\s~_]/g, '-');
+    const projectDir = path.join(homeDir, '.claude', 'projects', encodedPath);
+
+    const jsonlPath = path.join(projectDir, `${safeSessionId}.jsonl`);
+
+    const rel = path.relative(path.resolve(projectDir), path.resolve(jsonlPath));
+    if (rel.startsWith('..') || path.isAbsolute(rel)) {
+      return res.status(400).json({ error: 'Invalid path' });
+    }
+
+    let fileContent;
+    try {
+      fileContent = await fs.readFile(jsonlPath, 'utf8');
+    } catch (error) {
+      if (error.code === 'ENOENT') {
+        return res.status(404).json({ error: 'Session file not found' });
+      }
+      throw error;
+    }
+    const lines = fileContent.trim().split('\n');
+
+    const parsedContextWindow = parseInt(process.env.CONTEXT_WINDOW, 10);
+    const contextWindow = Number.isFinite(parsedContextWindow) ? parsedContextWindow : 160000;
+    let inputTokens = 0;
+    let cacheCreationTokens = 0;
+    let cacheReadTokens = 0;
+
+    for (let i = lines.length - 1; i >= 0; i--) {
+      try {
+        const entry = JSON.parse(lines[i]);
+        if (entry.type === 'assistant' && entry.message?.usage) {
+          const usage = entry.message.usage;
+          inputTokens = usage.input_tokens || 0;
+          cacheCreationTokens = usage.cache_creation_input_tokens || 0;
+          cacheReadTokens = usage.cache_read_input_tokens || 0;
+          break;
+        }
+      } catch (parseError) {
+        continue;
+      }
+    }
+
+    const totalUsed = inputTokens + cacheCreationTokens + cacheReadTokens;
+
+    res.json({
+      used: totalUsed,
+      total: contextWindow,
+      breakdown: {
+        input: inputTokens,
+        cacheCreation: cacheCreationTokens,
+        cacheRead: cacheReadTokens
+      }
+    });
+  } catch (error) {
+    next(error);
+  }
+});
 
 export default router;

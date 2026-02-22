@@ -8,6 +8,7 @@ import type {
   Project,
   ProjectSession,
   ProjectsUpdatedMessage,
+  SessionProvider,
 } from '../types/app';
 
 type UseProjectsStateArgs = {
@@ -286,59 +287,27 @@ export function useProjectsState({
 
     const shouldSwitchTab = !selectedSession || selectedSession.id !== sessionId;
 
+    const providerSessionKeys: Array<{ key: 'sessions' | 'cursorSessions' | 'codexSessions'; provider: SessionProvider }> = [
+      { key: 'sessions', provider: 'claude' },
+      { key: 'cursorSessions', provider: 'cursor' },
+      { key: 'codexSessions', provider: 'codex' },
+    ];
+
     for (const project of projects) {
-      const claudeSession = project.sessions?.find((session) => session.id === sessionId);
-      if (claudeSession) {
-        const shouldUpdateProject = selectedProject?.name !== project.name;
-        const shouldUpdateSession =
-          selectedSession?.id !== sessionId || selectedSession.__provider !== 'claude';
-
-        if (shouldUpdateProject) {
-          setSelectedProject(project);
+      for (const { key, provider } of providerSessionKeys) {
+        const session = (project[key] as ProjectSession[] | undefined)?.find((s) => s.id === sessionId);
+        if (session) {
+          if (selectedProject?.name !== project.name) {
+            setSelectedProject(project);
+          }
+          if (selectedSession?.id !== sessionId || selectedSession.__provider !== provider) {
+            setSelectedSession({ ...session, __provider: provider });
+          }
+          if (shouldSwitchTab) {
+            setActiveTab('chat');
+          }
+          return;
         }
-        if (shouldUpdateSession) {
-          setSelectedSession({ ...claudeSession, __provider: 'claude' });
-        }
-        if (shouldSwitchTab) {
-          setActiveTab('chat');
-        }
-        return;
-      }
-
-      const cursorSession = project.cursorSessions?.find((session) => session.id === sessionId);
-      if (cursorSession) {
-        const shouldUpdateProject = selectedProject?.name !== project.name;
-        const shouldUpdateSession =
-          selectedSession?.id !== sessionId || selectedSession.__provider !== 'cursor';
-
-        if (shouldUpdateProject) {
-          setSelectedProject(project);
-        }
-        if (shouldUpdateSession) {
-          setSelectedSession({ ...cursorSession, __provider: 'cursor' });
-        }
-        if (shouldSwitchTab) {
-          setActiveTab('chat');
-        }
-        return;
-      }
-
-      const codexSession = project.codexSessions?.find((session) => session.id === sessionId);
-      if (codexSession) {
-        const shouldUpdateProject = selectedProject?.name !== project.name;
-        const shouldUpdateSession =
-          selectedSession?.id !== sessionId || selectedSession.__provider !== 'codex';
-
-        if (shouldUpdateProject) {
-          setSelectedProject(project);
-        }
-        if (shouldUpdateSession) {
-          setSelectedSession({ ...codexSession, __provider: 'codex' });
-        }
-        if (shouldSwitchTab) {
-          setActiveTab('chat');
-        }
-        return;
       }
     }
   }, [sessionId, projects, selectedProject?.name, selectedSession?.id, selectedSession?.__provider]);
@@ -364,7 +333,7 @@ export function useProjectsState({
         setActiveTab('chat');
       }
 
-      const provider = localStorage.getItem('selected-provider') || 'claude';
+      const provider = session.__provider || localStorage.getItem('selected-provider') || 'claude';
       if (provider === 'cursor') {
         sessionStorage.setItem('cursorSessionId', session.id);
       }
