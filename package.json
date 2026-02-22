@@ -1,6 +1,6 @@
 {
   "name": "@siteboon/claude-code-ui",
-  "version": "1.18.0",
+  "version": "1.18.2",
   "description": "A web-based UI for Claude Code CLI",
   "type": "module",
   "main": "server/index.js",
@@ -12,6 +12,7 @@
     "server/",
     "shared/",
     "dist/",
+    "scripts/",
     "README.md"
   ],
   "homepage": "https://cloudcli.ai",
@@ -30,7 +31,8 @@
     "preview": "vite preview",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "start": "npm run build && npm run server",
-    "release": "./release.sh"
+    "release": "./release.sh",
+    "postinstall": "node scripts/fix-node-pty.js"
   },
   "keywords": [
     "claude code",
@@ -100,6 +102,7 @@
     "ws": "^8.14.2"
   },
   "devDependencies": {
+    "@release-it/conventional-changelog": "^10.0.5",
     "@types/node": "^22.19.7",
     "@types/react": "^18.2.43",
     "@types/react-dom": "^18.2.17",
