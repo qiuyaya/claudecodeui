@@ -59,10 +59,10 @@ router.post('/register', authLimiter, async (req, res) => {
       // Store refresh token
       refreshTokensDb.storeRefreshToken(user.id, refreshToken);
 
-      // Update last login
-      userDb.updateLastLogin(user.id);
-
       db.prepare('COMMIT').run();
+
+      // Update last login (non-fatal, outside transaction)
+      userDb.updateLastLogin(user.id);
 
       res.json({
         success: true,

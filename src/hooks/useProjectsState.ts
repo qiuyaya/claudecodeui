@@ -41,7 +41,8 @@ const projectsHaveChanges = (
       nextProject.displayName !== prevProject.displayName ||
       nextProject.fullPath !== prevProject.fullPath ||
       serialize(nextProject.sessionMeta) !== serialize(prevProject.sessionMeta) ||
-      serialize(nextProject.sessions) !== serialize(prevProject.sessions);
+      serialize(nextProject.sessions) !== serialize(prevProject.sessions) ||
+      serialize(nextProject.taskmaster) !== serialize(prevProject.taskmaster);
 
     if (baseChanged) {
       return true;
@@ -53,7 +54,8 @@ const projectsHaveChanges = (
 
     return (
       serialize(nextProject.cursorSessions) !== serialize(prevProject.cursorSessions) ||
-      serialize(nextProject.codexSessions) !== serialize(prevProject.codexSessions)
+      serialize(nextProject.codexSessions) !== serialize(prevProject.codexSessions) ||
+      serialize(nextProject.geminiSessions) !== serialize(prevProject.geminiSessions)
     );
   });
 };
@@ -63,6 +65,7 @@ const getProjectSessions = (project: Project): ProjectSession[] => {
     ...(project.sessions ?? []),
     ...(project.codexSessions ?? []),
     ...(project.cursorSessions ?? []),
+    ...(project.geminiSessions ?? []),
   ];
 };
 
@@ -102,6 +105,20 @@ const isUpdateAdditive = (
   );
 };
 
+const VALID_TABS: Set<string> = new Set(['chat', 'files', 'shell', 'git', 'tasks', 'preview']);
+
+const readPersistedTab = (): AppTab => {
+  try {
+    const stored = localStorage.getItem('activeTab');
+    if (stored && VALID_TABS.has(stored)) {
+      return stored as AppTab;
+    }
+  } catch {
+    // localStorage unavailable
+  }
+  return 'chat';
+};
+
 export function useProjectsState({
   sessionId,
   navigate,
@@ -112,7 +129,16 @@ export function useProjectsState({
   const [projects, setProjects] = useState<Project[]>([]);
   const [selectedProject, setSelectedProject] = useState<Project | null>(null);
   const [selectedSession, setSelectedSession] = useState<ProjectSession | null>(null);
-  const [activeTab, setActiveTab] = useState<AppTab>('chat');
+  const [activeTab, setActiveTab] = useState<AppTab>(readPersistedTab);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('activeTab', activeTab);
+    } catch {
+      // Silently ignore storage errors
+    }
+  }, [activeTab]);
+
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [isLoadingProjects, setIsLoadingProjects] = useState(true);
   const [loadingProgress, setLoadingProgress] = useState<LoadingProgress | null>(null);
@@ -287,11 +313,13 @@ export function useProjectsState({
 
     const shouldSwitchTab = !selectedSession || selectedSession.id !== sessionId;
 
-    const providerSessionKeys: Array<{ key: 'sessions' | 'cursorSessions' | 'codexSessions'; provider: SessionProvider }> = [
+    const providerSessionKeys: Array<{ key: 'sessions' | 'cursorSessions' | 'codexSessions' | 'geminiSessions'; provider: SessionProvider }> = [
       { key: 'sessions', provider: 'claude' },
       { key: 'cursorSessions', provider: 'cursor' },
       { key: 'codexSessions', provider: 'codex' },
+      { key: 'geminiSessions', provider: 'gemini' },
     ];
+
 
     for (const project of projects) {
       for (const { key, provider } of providerSessionKeys) {
@@ -329,7 +357,7 @@ export function useProjectsState({
     (session: ProjectSession) => {
       setSelectedSession(session);
 
-      if (activeTab !== 'git' && activeTab !== 'preview') {
+      if (activeTab === 'tasks' || activeTab === 'preview') {
         setActiveTab('chat');
       }
 

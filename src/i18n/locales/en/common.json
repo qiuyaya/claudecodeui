@@ -114,7 +114,22 @@
     "justNow": "just now",
     "minAgo": "{{count}} min ago",
     "hoursAgo": "{{count}} hours ago",
-    "daysAgo": "{{count}} days ago"
+    "daysAgo": "{{count}} days ago",
+    "newFile": "New File (Cmd+N)",
+    "newFolder": "New Folder (Cmd+Shift+N)",
+    "refresh": "Refresh",
+    "collapseAll": "Collapse All",
+    "context": {
+      "rename": "Rename",
+      "delete": "Delete",
+      "copyPath": "Copy Path",
+      "download": "Download",
+      "newFile": "New File",
+      "newFolder": "New Folder",
+      "refresh": "Refresh",
+      "menuLabel": "File context menu",
+      "loading": "Loading..."
+    }
   },
   "projectWizard": {
     "title": "Create New Project",
@@ -200,6 +215,7 @@
     "viewFullRelease": "View full release",
     "updateProgress": "Update Progress:",
     "manualUpgrade": "Manual upgrade:",
+    "npmUpgradeCommand": "npm install -g @siteboon/claude-code-ui@latest",
     "manualUpgradeHint": "Or click \"Update Now\" to run the update automatically.",
     "updateCompleted": "Update completed successfully!",
     "restartServer": "Please restart the server to apply changes.",

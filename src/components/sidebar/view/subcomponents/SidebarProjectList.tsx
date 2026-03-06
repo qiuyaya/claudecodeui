@@ -7,7 +7,6 @@ import type {
   LoadingSessionsByProject,
   MCPServerStatus,
   SessionWithProvider,
-  TouchHandlerFactory,
 } from '../../types/types';
 import SidebarProjectItem from './SidebarProjectItem';
 import SidebarProjectsState from './SidebarProjectsState';
@@ -56,8 +55,7 @@ export type SidebarProjectListProps = {
   onEditingSessionNameChange: (value: string) => void;
   onStartEditingSession: (sessionId: string, initialName: string) => void;
   onCancelEditingSession: () => void;
-  onSaveEditingSession: (projectName: string, sessionId: string, summary: string) => void;
-  touchHandlerFactory: TouchHandlerFactory;
+  onSaveEditingSession: (projectName: string, sessionId: string, summary: string, provider: SessionProvider) => void;
   hasMoreProjects: boolean;
   isLoadingMoreProjects: boolean;
   onLoadMoreProjects: () => void;
@@ -104,7 +102,6 @@ const SidebarProjectList = memo(function SidebarProjectList({
   onStartEditingSession,
   onCancelEditingSession,
   onSaveEditingSession,
-  touchHandlerFactory,
   hasMoreProjects,
   isLoadingMoreProjects,
   onLoadMoreProjects,
@@ -133,12 +130,21 @@ const SidebarProjectList = memo(function SidebarProjectList({
     />
   );
 
+  useEffect(() => {
+    let baseTitle = 'CloudCLI UI';
+    const displayName = selectedProject?.displayName?.trim();
+    if (displayName) {
+      baseTitle = `${displayName} - ${baseTitle}`;
+    }
+    document.title = baseTitle;
+  }, [selectedProject]);
+
   const showProjects = !isLoading && projects.length > 0 && filteredProjects.length > 0;
   const hasSelection = selectedProjects.size > 0;
   const allSelected = hasSelection && selectedProjects.size === filteredProjects.length;
 
   return (
-    <div className="md:space-y-1 pb-safe-area-inset-bottom">
+    <div className="pb-safe-area-inset-bottom md:space-y-1">
       {showProjects && (
         <div className="hidden md:flex items-center justify-between px-2 py-1 text-xs text-muted-foreground">
           <button
@@ -204,7 +210,6 @@ const SidebarProjectList = memo(function SidebarProjectList({
               onStartEditingSession={onStartEditingSession}
               onCancelEditingSession={onCancelEditingSession}
               onSaveEditingSession={onSaveEditingSession}
-              touchHandlerFactory={touchHandlerFactory}
               t={t}
             />
           ))}

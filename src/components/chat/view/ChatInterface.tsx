@@ -1,15 +1,15 @@
 import React, { useCallback, useEffect, useRef } from 'react';
-import QuickSettingsPanel from '../../QuickSettingsPanel';
-import { useTasksSettings } from '../../../contexts/TasksSettingsContext';
 import { useTranslation } from 'react-i18next';
-import ChatMessagesPane from './subcomponents/ChatMessagesPane';
-import ChatComposer from './subcomponents/ChatComposer';
-import type { ChatInterfaceProps } from '../types/types';
+import { useTasksSettings } from '../../../contexts/TasksSettingsContext';
+import { QuickSettingsPanel } from '../../quick-settings-panel';
+import type { ChatInterfaceProps, Provider  } from '../types/types';
 import { useChatProviderState } from '../hooks/useChatProviderState';
 import { useChatSessionState } from '../hooks/useChatSessionState';
 import { useChatRealtimeHandlers } from '../hooks/useChatRealtimeHandlers';
 import { useChatComposerState } from '../hooks/useChatComposerState';
-import type { Provider } from '../types/types';
+import ChatMessagesPane from './subcomponents/ChatMessagesPane';
+import ChatComposer from './subcomponents/ChatComposer';
+
 
 type PendingViewSession = {
   sessionId: string | null;
@@ -64,6 +64,8 @@ function ChatInterface({
     setClaudeModel,
     codexModel,
     setCodexModel,
+    geminiModel,
+    setGeminiModel,
     permissionMode,
     pendingPermissionRequests,
     setPendingPermissionRequests,
@@ -85,7 +87,6 @@ function ChatInterface({
     isLoadingMoreMessages,
     hasMoreMessages,
     totalMessages,
-    isSystemSessionChange,
     setIsSystemSessionChange,
     canAbortSession,
     setCanAbortSession,
@@ -174,12 +175,14 @@ function ChatInterface({
     cursorModel,
     claudeModel,
     codexModel,
+    geminiModel,
     isLoading,
     canAbortSession,
     tokenBudget,
     sendMessage,
     sendByCtrlEnter,
     onSessionActive,
+    onSessionProcessing,
     onInputFocusChange,
     onFileOpen,
     onShowSettings,
@@ -239,13 +242,6 @@ function ChatInterface({
   }, [canAbortSession, handleAbortSession, isLoading]);
 
   useEffect(() => {
-    const processingSessionId = selectedSession?.id || currentSessionId;
-    if (processingSessionId && isLoading && onSessionProcessing) {
-      onSessionProcessing(processingSessionId);
-    }
-  }, [currentSessionId, isLoading, onSessionProcessing, selectedSession?.id]);
-
-  useEffect(() => {
     return () => {
       resetStreamingState();
     };
@@ -257,10 +253,12 @@ function ChatInterface({
         ? t('messageTypes.cursor')
         : provider === 'codex'
           ? t('messageTypes.codex')
-          : t('messageTypes.claude');
+          : provider === 'gemini'
+            ? t('messageTypes.gemini')
+            : t('messageTypes.claude');
 
     return (
-      <div className="flex items-center justify-center h-full">
+      <div className="flex h-full items-center justify-center">
         <div className="text-center text-muted-foreground">
           <p className="text-sm">
             {t('projectSelection.startChatWithProvider', {
@@ -275,7 +273,7 @@ function ChatInterface({
 
   return (
     <>
-      <div className="h-full flex flex-col">
+      <div className="flex h-full flex-col">
         <ChatMessagesPane
           scrollContainerRef={scrollContainerRef}
           onWheel={handleScroll}
@@ -293,6 +291,8 @@ function ChatInterface({
           setCursorModel={setCursorModel}
           codexModel={codexModel}
           setCodexModel={setCodexModel}
+          geminiModel={geminiModel}
+          setGeminiModel={setGeminiModel}
           tasksEnabled={tasksEnabled}
           isTaskMasterInstalled={isTaskMasterInstalled}
           onShowAllTasks={onShowAllTasks}
@@ -380,8 +380,10 @@ function ChatInterface({
               provider === 'cursor'
                 ? t('messageTypes.cursor')
                 : provider === 'codex'
-                ? t('messageTypes.codex')
-                : t('messageTypes.claude'),
+                  ? t('messageTypes.codex')
+                  : provider === 'gemini'
+                    ? t('messageTypes.gemini')
+                    : t('messageTypes.claude'),
           })}
           isTextareaExpanded={isTextareaExpanded}
           sendByCtrlEnter={sendByCtrlEnter}
