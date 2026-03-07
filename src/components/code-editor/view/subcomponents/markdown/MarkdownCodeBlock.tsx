@@ -1,8 +1,11 @@
-import { useState } from 'react';
+import { useState, useCallback } from 'react';
 import type { ComponentProps } from 'react';
-import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
+import { PrismLight as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { oneDark as prismOneDark } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import { copyTextToClipboard } from '../../../../../utils/clipboard';
+
+// Languages are already registered in the main Markdown.tsx
+// PrismLight shares the registry globally
 
 type MarkdownCodeBlockProps = {
   inline?: boolean;
@@ -20,6 +23,15 @@ export default function MarkdownCodeBlock({
   const rawContent = Array.isArray(children) ? children.join('') : String(children ?? '');
   const looksMultiline = /[\r\n]/.test(rawContent);
   const shouldRenderInline = inline || !looksMultiline;
+
+  const handleCopy = useCallback(() => {
+    copyTextToClipboard(rawContent).then((success) => {
+      if (success) {
+        setCopied(true);
+        setTimeout(() => setCopied(false), 2000);
+      }
+    });
+  }, [rawContent]);
 
   if (shouldRenderInline) {
     return (
@@ -43,13 +55,7 @@ export default function MarkdownCodeBlock({
 
       <button
         type="button"
-        onClick={() =>
-          copyTextToClipboard(rawContent).then((success) => {
-            if (success) {
-              setCopied(true);
-              setTimeout(() => setCopied(false), 2000);
-            }
-          })}
+        onClick={handleCopy}
         className="absolute right-2 top-2 z-10 rounded-md border border-gray-600 bg-gray-700/80 px-2 py-1 text-xs text-white opacity-0 transition-opacity hover:bg-gray-700 group-hover:opacity-100"
       >
         {copied ? 'Copied!' : 'Copy'}

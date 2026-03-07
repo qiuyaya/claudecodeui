@@ -54,7 +54,11 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, o
   const permissionSuggestion = getClaudePermissionSuggestion(message, provider);
   const [permissionGrantState, setPermissionGrantState] = React.useState<PermissionGrantState>('idle');
   const [messageCopied, setMessageCopied] = React.useState(false);
+  const copiedTimerRef = React.useRef<ReturnType<typeof setTimeout>>();
 
+  React.useEffect(() => {
+    return () => { clearTimeout(copiedTimerRef.current); };
+  }, []);
 
   React.useEffect(() => {
     setPermissionGrantState('idle');
@@ -134,6 +138,8 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, o
                   copyTextToClipboard(text).then((success) => {
                     if (!success) return;
                     setMessageCopied(true);
+                    clearTimeout(copiedTimerRef.current);
+                    copiedTimerRef.current = setTimeout(() => setMessageCopied(false), 2000);
                   });
                 }}
                 title={messageCopied ? t('copyMessage.copied') : t('copyMessage.copy')}

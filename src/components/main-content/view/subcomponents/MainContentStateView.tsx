@@ -17,20 +17,42 @@ export default function MainContentStateView({ mode, isMobile, onMenuClick }: Ma
       )}
 
       {isLoading ? (
-        <div className="flex flex-1 items-center justify-center">
-          <div className="text-center text-muted-foreground">
-            <div className="mx-auto mb-4 h-10 w-10">
-              <div
-                className="h-full w-full rounded-full border-[3px] border-muted border-t-primary"
-                style={{
-                  animation: 'spin 1s linear infinite',
-                  WebkitAnimation: 'spin 1s linear infinite',
-                  MozAnimation: 'spin 1s linear infinite',
-                }}
-              />
+        <div className="flex flex-1 flex-col overflow-hidden">
+          {/* Skeleton header tabs */}
+          <div className="flex animate-pulse items-center gap-2 border-b border-border/50 px-4 py-3">
+            {[48, 40, 36, 32].map((w, i) => (
+              <div key={i} className="h-7 rounded-md bg-muted/60" style={{ width: `${w}px` }} />
+            ))}
+          </div>
+          {/* Skeleton chat messages */}
+          <div className="flex-1 space-y-4 overflow-hidden p-4">
+            {/* Assistant message skeleton */}
+            <div className="flex items-start gap-3 animate-pulse">
+              <div className="h-8 w-8 flex-shrink-0 rounded-full bg-muted/60" />
+              <div className="flex-1 space-y-2">
+                <div className="h-3.5 w-24 rounded bg-muted/60" />
+                <div className="h-3 w-3/4 rounded bg-muted/40" />
+                <div className="h-3 w-1/2 rounded bg-muted/40" />
+              </div>
             </div>
-            <h2 className="mb-1 text-lg font-semibold text-foreground">{t('mainContent.loading')}</h2>
-            <p className="text-sm">{t('mainContent.settingUpWorkspace')}</p>
+            {/* User message skeleton */}
+            <div className="flex justify-end animate-pulse" style={{ animationDelay: '150ms' }}>
+              <div className="h-10 w-48 rounded-2xl bg-blue-600/20" />
+            </div>
+            {/* Assistant message skeleton */}
+            <div className="flex items-start gap-3 animate-pulse" style={{ animationDelay: '300ms' }}>
+              <div className="h-8 w-8 flex-shrink-0 rounded-full bg-muted/60" />
+              <div className="flex-1 space-y-2">
+                <div className="h-3.5 w-24 rounded bg-muted/60" />
+                <div className="h-3 w-5/6 rounded bg-muted/40" />
+                <div className="h-3 w-2/3 rounded bg-muted/40" />
+                <div className="h-3 w-3/5 rounded bg-muted/40" />
+              </div>
+            </div>
+          </div>
+          {/* Skeleton input */}
+          <div className="animate-pulse border-t border-border/50 p-3">
+            <div className="h-12 rounded-xl bg-muted/40" />
           </div>
         </div>
       ) : (

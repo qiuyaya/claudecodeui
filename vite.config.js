@@ -47,7 +47,8 @@ export default defineConfig(({ command, mode }) => {
               '@codemirror/theme-one-dark'
             ],
             'vendor-xterm': ['@xterm/xterm', '@xterm/addon-fit', '@xterm/addon-clipboard', '@xterm/addon-webgl'],
-            'vendor-markdown': ['react-markdown', 'remark-gfm', 'remark-math', 'rehype-katex', 'react-syntax-highlighter']
+            'vendor-markdown': ['react-markdown', 'remark-gfm', 'remark-math', 'rehype-katex'],
+            'vendor-syntax': ['react-syntax-highlighter']
           }
         }
       }

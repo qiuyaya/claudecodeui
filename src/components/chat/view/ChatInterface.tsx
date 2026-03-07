@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useRef } from 'react';
+import React, { useCallback, useEffect, useRef, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useTasksSettings } from '../../../contexts/TasksSettingsContext';
 import { QuickSettingsPanel } from '../../quick-settings-panel';
@@ -197,6 +197,29 @@ function ChatInterface({
     setPendingPermissionRequests,
   });
 
+  // Stable callback references to prevent child re-renders
+  const handleSetProvider = useCallback((nextProvider: string) => setProvider(nextProvider as Provider), [setProvider]);
+
+  const handleRemoveImage = useCallback(
+    (index: number) => setAttachedImages((previous) => previous.filter((_, currentIndex) => currentIndex !== index)),
+    [setAttachedImages],
+  );
+
+  const hasInput = useMemo(() => Boolean(input.trim()), [input]);
+  const hasMessages = useMemo(() => chatMessages.length > 0, [chatMessages.length]);
+  const frequentCommandsFiltered = useMemo(() => commandQuery ? [] : frequentCommands, [commandQuery, frequentCommands]);
+
+  const placeholder = useMemo(() => t('input.placeholder', {
+    provider:
+      provider === 'cursor'
+        ? t('messageTypes.cursor')
+        : provider === 'codex'
+          ? t('messageTypes.codex')
+          : provider === 'gemini'
+            ? t('messageTypes.gemini')
+            : t('messageTypes.claude'),
+  }), [t, provider]);
+
   useChatRealtimeHandlers({
     latestMessage,
     provider,
@@ -283,7 +306,7 @@ function ChatInterface({
           selectedSession={selectedSession}
           currentSessionId={currentSessionId}
           provider={provider}
-          setProvider={(nextProvider) => setProvider(nextProvider as Provider)}
+          setProvider={handleSetProvider}
           textareaRef={textareaRef}
           claudeModel={claudeModel}
           setClaudeModel={setClaudeModel}
@@ -335,19 +358,15 @@ function ChatInterface({
           tokenBudget={tokenBudget}
           slashCommandsCount={slashCommandsCount}
           onToggleCommandMenu={handleToggleCommandMenu}
-          hasInput={Boolean(input.trim())}
+          hasInput={hasInput}
           onClearInput={handleClearInput}
           isUserScrolledUp={isUserScrolledUp}
-          hasMessages={chatMessages.length > 0}
+          hasMessages={hasMessages}
           onScrollToBottom={scrollToBottomAndReset}
           onSubmit={handleSubmit}
           isDragActive={isDragActive}
           attachedImages={attachedImages}
-          onRemoveImage={(index) =>
-            setAttachedImages((previous) =>
-              previous.filter((_, currentIndex) => currentIndex !== index),
-            )
-          }
+          onRemoveImage={handleRemoveImage}
           uploadingImages={uploadingImages}
           imageErrors={imageErrors}
           showFileDropdown={showFileDropdown}
@@ -359,7 +378,7 @@ function ChatInterface({
           onCommandSelect={handleCommandSelect}
           onCloseCommandMenu={resetCommandMenuState}
           isCommandMenuOpen={showCommandMenu}
-          frequentCommands={commandQuery ? [] : frequentCommands}
+          frequentCommands={frequentCommandsFiltered}
           getRootProps={getRootProps as (...args: unknown[]) => Record<string, unknown>}
           getInputProps={getInputProps as (...args: unknown[]) => Record<string, unknown>}
           openImagePicker={openImagePicker}
@@ -375,16 +394,7 @@ function ChatInterface({
           onTextareaInput={handleTextareaInput}
           onInputFocusChange={handleInputFocusChange}
           isInputFocused={isInputFocused}
-          placeholder={t('input.placeholder', {
-            provider:
-              provider === 'cursor'
-                ? t('messageTypes.cursor')
-                : provider === 'codex'
-                  ? t('messageTypes.codex')
-                  : provider === 'gemini'
-                    ? t('messageTypes.gemini')
-                    : t('messageTypes.claude'),
-          })}
+          placeholder={placeholder}
           isTextareaExpanded={isTextareaExpanded}
           sendByCtrlEnter={sendByCtrlEnter}
           onTranscript={handleTranscript}

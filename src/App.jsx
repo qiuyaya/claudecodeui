@@ -357,7 +357,7 @@ function AppContent() {
       const shouldSwitchTab = !selectedSession || selectedSession.id !== sessionId;
       // Find the session across all projects
       for (const project of projects) {
-        let session = project.sessions?.find(s => s.id === sessionId);
+        const session = project.sessions?.find(s => s.id === sessionId);
         if (session) {
           setSelectedProject(project);
           setSelectedSession({ ...session, __provider: 'claude' });

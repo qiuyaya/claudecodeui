@@ -5,6 +5,7 @@ import { AuthProvider, ProtectedRoute } from './components/auth';
 import { TaskMasterProvider } from './contexts/TaskMasterContext';
 import { TasksSettingsProvider } from './contexts/TasksSettingsContext';
 import { WebSocketProvider } from './contexts/WebSocketContext';
+import { ToastProvider } from './contexts/ToastContext';
 import AppContent from './components/app/AppContent';
 import i18n from './i18n/config.js';
 
@@ -12,22 +13,24 @@ export default function App() {
   return (
     <I18nextProvider i18n={i18n}>
       <ThemeProvider>
-        <AuthProvider>
-          <WebSocketProvider>
-            <TasksSettingsProvider>
-              <TaskMasterProvider>
-                <ProtectedRoute>
-                  <Router basename={window.__ROUTER_BASENAME__ || ''}>
-                    <Routes>
-                      <Route path="/" element={<AppContent />} />
-                      <Route path="/session/:sessionId" element={<AppContent />} />
-                    </Routes>
-                  </Router>
-                </ProtectedRoute>
-              </TaskMasterProvider>
-            </TasksSettingsProvider>
-          </WebSocketProvider>
-        </AuthProvider>
+        <ToastProvider>
+          <AuthProvider>
+            <WebSocketProvider>
+              <TasksSettingsProvider>
+                <TaskMasterProvider>
+                  <ProtectedRoute>
+                    <Router basename={window.__ROUTER_BASENAME__ || ''}>
+                      <Routes>
+                        <Route path="/" element={<AppContent />} />
+                        <Route path="/session/:sessionId" element={<AppContent />} />
+                      </Routes>
+                    </Router>
+                  </ProtectedRoute>
+                </TaskMasterProvider>
+              </TasksSettingsProvider>
+            </WebSocketProvider>
+          </AuthProvider>
+        </ToastProvider>
       </ThemeProvider>
     </I18nextProvider>
   );

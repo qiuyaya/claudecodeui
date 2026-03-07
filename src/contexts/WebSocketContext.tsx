@@ -4,23 +4,55 @@ import { IS_PLATFORM } from '../constants/config';
 
 type MessageHandler = (message: any) => void;
 
-type WebSocketContextType = {
+// Stable context - rarely changes (only on connect/disconnect)
+type WebSocketConnectionContextType = {
   ws: WebSocket | null;
   sendMessage: (message: any) => void;
-  latestMessage: any | null;
   isConnected: boolean;
   subscribe: (handler: MessageHandler) => () => void;
 };
 
-const WebSocketContext = createContext<WebSocketContextType | null>(null);
+// Dynamic context - changes on every message
+type WebSocketMessageContextType = {
+  latestMessage: any | null;
+};
 
-export const useWebSocket = () => {
-  const context = useContext(WebSocketContext);
-  if (!context) {
+// Combined type for backward compatibility via useWebSocket()
+type WebSocketContextType = WebSocketConnectionContextType & WebSocketMessageContextType;
+
+const WebSocketConnectionContext = createContext<WebSocketConnectionContextType | null>(null);
+const WebSocketMessageContext = createContext<WebSocketMessageContextType>({ latestMessage: null });
+
+/**
+ * Use this hook when you need ALL WebSocket state including latestMessage.
+ * Note: This will re-render on every WebSocket message.
+ * If you only need sendMessage/subscribe/isConnected, use useWebSocketConnection() instead.
+ */
+export const useWebSocket = (): WebSocketContextType => {
+  const connection = useContext(WebSocketConnectionContext);
+  const message = useContext(WebSocketMessageContext);
+  if (!connection) {
     throw new Error('useWebSocket must be used within a WebSocketProvider');
+  }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  return useMemo(() => ({ ...connection, ...message }), [connection, message]);
+};
+
+/**
+ * Use this hook when you only need connection state (sendMessage, subscribe, isConnected).
+ * This does NOT re-render when messages arrive - use subscribe() for message handling.
+ */
+export const useWebSocketConnection = (): WebSocketConnectionContextType => {
+  const context = useContext(WebSocketConnectionContext);
+  if (!context) {
+    throw new Error('useWebSocketConnection must be used within a WebSocketProvider');
   }
   return context;
 };
+
+const MAX_RECONNECT_DELAY = 30000;
+const HEARTBEAT_INTERVAL = 30000;
+const MAX_MISSED_PONGS = 2;
 
 const buildWebSocketUrl = () => {
   const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -28,53 +60,85 @@ const buildWebSocketUrl = () => {
   return `${protocol}//${window.location.host}/ws`;
 };
 
-const useWebSocketProviderState = (): WebSocketContextType => {
+export const WebSocketProvider = ({ children }: { children: React.ReactNode }) => {
   const wsRef = useRef<WebSocket | null>(null);
-  const unmountedRef = useRef(false); // Track if component is unmounted
+  const unmountedRef = useRef(false);
   const [latestMessage, setLatestMessage] = useState<any>(null);
   const [isConnected, setIsConnected] = useState(false);
   const reconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const heartbeatIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const missedPongsRef = useRef(0);
   const connectRef = useRef<() => void>(() => {});
   const subscribersRef = useRef<Set<MessageHandler>>(new Set());
   const reconnectAttemptsRef = useRef(0);
-  const MAX_RECONNECT_DELAY = 30000;
   const { token } = useAuth();
 
+  // Heartbeat management
+  const stopHeartbeat = useCallback(() => {
+    if (heartbeatIntervalRef.current) {
+      clearInterval(heartbeatIntervalRef.current);
+      heartbeatIntervalRef.current = null;
+    }
+  }, []);
+
+  const startHeartbeat = useCallback(() => {
+    stopHeartbeat();
+    missedPongsRef.current = 0;
+    heartbeatIntervalRef.current = setInterval(() => {
+      const socket = wsRef.current;
+      if (socket && socket.readyState === WebSocket.OPEN) {
+        missedPongsRef.current++;
+        if (missedPongsRef.current > MAX_MISSED_PONGS) {
+          socket.close(4000, 'Heartbeat timeout');
+          return;
+        }
+        try {
+          socket.send(JSON.stringify({ type: 'ping', ts: Date.now() }));
+        } catch {
+          // Send failed, connection is likely dead
+        }
+      }
+    }, HEARTBEAT_INTERVAL);
+  }, [stopHeartbeat]);
+
   useEffect(() => {
-    unmountedRef.current = false; // Reset on each token change
+    unmountedRef.current = false;
     connectRef.current();
 
     return () => {
       if (reconnectTimeoutRef.current) {
         clearTimeout(reconnectTimeoutRef.current);
       }
+      stopHeartbeat();
       if (wsRef.current) {
         wsRef.current.close();
         wsRef.current = null;
       }
     };
-  }, [token]); // everytime token changes, we reconnect
+  }, [token, stopHeartbeat]);
 
-  // Track actual unmount separately
   useEffect(() => {
     return () => {
       unmountedRef.current = true;
     };
   }, []);
 
-  // Setup WebSocket event handlers
   const setupWebSocketHandlers = useCallback((websocket: WebSocket) => {
     websocket.onopen = () => {
       setIsConnected(true);
       wsRef.current = websocket;
       reconnectAttemptsRef.current = 0;
+      startHeartbeat();
     };
 
     websocket.onmessage = (event) => {
       try {
         const data = JSON.parse(event.data);
+        if (data.type === 'pong') {
+          missedPongsRef.current = 0;
+          return;
+        }
         setLatestMessage(data);
-        // Also dispatch to subscribers for direct consumption without re-render
         subscribersRef.current.forEach(handler => {
           try {
             handler(data);
@@ -90,8 +154,8 @@ const useWebSocketProviderState = (): WebSocketContextType => {
     websocket.onclose = (event) => {
       setIsConnected(false);
       wsRef.current = null;
+      stopHeartbeat();
 
-      // Don't reconnect if the close was intentional (code 1000) or component unmounted
       if (event.code === 1000 || unmountedRef.current) return;
 
       const attempt = reconnectAttemptsRef.current;
@@ -109,38 +173,31 @@ const useWebSocketProviderState = (): WebSocketContextType => {
     websocket.onerror = (error) => {
       console.error('WebSocket error:', error);
     };
-  }, []);
+  }, [startHeartbeat, stopHeartbeat]);
 
   const connect = useCallback(() => {
-    if (unmountedRef.current) return; // Prevent connection if unmounted
+    if (unmountedRef.current) return;
     try {
-      // Construct WebSocket URL (without token)
       const wsUrl = buildWebSocketUrl();
 
-      // Platform mode: connect without token
       if (IS_PLATFORM) {
         const websocket = new WebSocket(wsUrl);
         setupWebSocketHandlers(websocket);
         return;
       }
 
-      // OSS mode: pass token via subprotocol (not in URL for security)
       if (!token) {
         console.warn('No authentication token found for WebSocket connection');
         return;
       }
 
-      // Create WebSocket with token in subprotocol
-      // The subprotocol format is "token.<actual_token>"
       const websocket = new WebSocket(wsUrl, [`token.${token}`]);
       setupWebSocketHandlers(websocket);
-
     } catch (error) {
       console.error('Error creating WebSocket connection:', error);
     }
   }, [token, setupWebSocketHandlers]);
 
-  // Keep connectRef in sync with the latest connect function
   useEffect(() => {
     connectRef.current = connect;
   }, [connect]);
@@ -159,26 +216,26 @@ const useWebSocketProviderState = (): WebSocketContextType => {
     return () => { subscribersRef.current.delete(handler); };
   }, []);
 
-  const value: WebSocketContextType = useMemo(() =>
-  ({
+  // Connection context value - only changes on connect/disconnect
+  const connectionValue: WebSocketConnectionContextType = useMemo(() => ({
     ws: isConnected ? wsRef.current : null,
     sendMessage,
-    latestMessage,
     isConnected,
-    subscribe
-  }), [sendMessage, latestMessage, isConnected, subscribe]);
+    subscribe,
+  }), [sendMessage, isConnected, subscribe]);
 
-  return value;
-};
-
-export const WebSocketProvider = ({ children }: { children: React.ReactNode }) => {
-  const webSocketData = useWebSocketProviderState();
+  // Message context value - changes on every message
+  const messageValue: WebSocketMessageContextType = useMemo(() => ({
+    latestMessage,
+  }), [latestMessage]);
 
   return (
-    <WebSocketContext.Provider value={webSocketData}>
-      {children}
-    </WebSocketContext.Provider>
+    <WebSocketConnectionContext.Provider value={connectionValue}>
+      <WebSocketMessageContext.Provider value={messageValue}>
+        {children}
+      </WebSocketMessageContext.Provider>
+    </WebSocketConnectionContext.Provider>
   );
 };
 
-export default WebSocketContext;
+export default WebSocketConnectionContext;

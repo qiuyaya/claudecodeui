@@ -1,7 +1,20 @@
-import { useWebSocket } from '../../contexts/WebSocketContext';
+import { useEffect, useRef } from 'react';
+import { useWebSocketConnection } from '../../contexts/WebSocketContext';
+import { useToast } from '../../contexts/ToastContext';
 
 export default function ConnectionStatusBar() {
-  const { isConnected } = useWebSocket();
+  const { isConnected } = useWebSocketConnection();
+  const { success } = useToast();
+  const wasDisconnectedRef = useRef(false);
+
+  useEffect(() => {
+    if (!isConnected) {
+      wasDisconnectedRef.current = true;
+    } else if (wasDisconnectedRef.current) {
+      wasDisconnectedRef.current = false;
+      success('Connection restored');
+    }
+  }, [isConnected, success]);
 
   if (isConnected) return null;
 

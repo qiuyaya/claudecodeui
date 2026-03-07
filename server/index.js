@@ -504,6 +504,18 @@ app.use(express.json({
 }));
 app.use(express.urlencoded({ limit: DEFAULT_BODY_LIMIT, extended: true }));
 
+// Enable weak ETags for API responses (Express built-in)
+app.set('etag', 'weak');
+
+// API cache headers middleware - add Cache-Control for GET API responses
+app.use('/api', (req, res, next) => {
+  if (req.method === 'GET') {
+    // Short cache for API data, rely on ETag for conditional requests
+    res.setHeader('Cache-Control', 'private, no-cache');
+  }
+  next();
+});
+
 // Public health check endpoint (no authentication required, no rate limit)
 app.get('/health', (req, res) => {
     res.json({
@@ -664,7 +676,7 @@ async function getCachedProjects(progressCallback) {
 
 app.get('/api/projects', authenticateToken, async (req, res) => {
     try {
-        const projects = await getProjects(broadcastProgress);
+        const projects = await getCachedProjects(broadcastProgress);
         res.json(projects);
     } catch (error) {
         res.status(500).json({ error: error.message });
@@ -1640,6 +1652,14 @@ function handleChatConnection(ws) {
     ws.on('message', async (message) => {
         try {
             const data = JSON.parse(message);
+
+            // Respond to client heartbeat pings
+            if (data.type === 'ping') {
+                if (ws.readyState === 1) {
+                    ws.send(JSON.stringify({ type: 'pong', ts: data.ts }));
+                }
+                return;
+            }
 
             if (data.type === 'claude-command') {
                 console.log('[DEBUG] User message:', data.command || '[Continue/Resume]');

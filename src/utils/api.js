@@ -26,21 +26,30 @@ const requestCache = new Map();
 const DEFAULT_CACHE_TTL = 30000; // 30 seconds default
 
 // Per-endpoint cache TTL overrides (longer TTL for infrequently changing data)
-const CACHE_TTL_OVERRIDES = {
-  '/api/projects': 300000,          // 5 minutes - project list changes rarely
-  '/api/auth/status': 120000,       // 2 minutes
-  '/api/auth/user': 120000,         // 2 minutes
-  '/api/user/git-config': 300000,   // 5 minutes
-  '/api/user/onboarding-status': 300000,
-  '/api/taskmaster/prd-templates': 600000, // 10 minutes
-  '/api/browse-filesystem': 60000,  // 1 minute
-};
+// Order: most specific prefixes first — getCacheTTL matches the first entry
+const CACHE_TTL_OVERRIDES = [
+  ['/api/codex/sessions', 15000],     // 15 seconds for session messages (dynamic data)
+  ['/api/cursor/sessions', 15000],
+  ['/api/gemini/sessions', 15000],
+  ['/api/projects/create', 0],        // no cache for mutations via GET
+  ['/api/projects/', 15000],          // 15 seconds for project sub-resources
+  ['/api/projects', 300000],          // 5 minutes - project list changes rarely
+  ['/api/auth/status', 120000],       // 2 minutes
+  ['/api/auth/user', 120000],         // 2 minutes
+  ['/api/user/git-config', 300000],   // 5 minutes
+  ['/api/user/onboarding-status', 300000],
+  ['/api/taskmaster/prd-templates', 600000], // 10 minutes
+  ['/api/browse-filesystem', 60000],  // 1 minute
+];
 
 const getCacheTTL = (url) => {
   const basePath = url.split('?')[0];
-  for (const [prefix, ttl] of Object.entries(CACHE_TTL_OVERRIDES)) {
-    if (basePath === prefix || basePath.startsWith(prefix + '/')) {
-      return ttl;
+  for (const [prefix, ttl] of CACHE_TTL_OVERRIDES) {
+    if (prefix.endsWith('/')) {
+      // Trailing-slash prefix: only match sub-paths (not the bare path)
+      if (basePath.startsWith(prefix)) return ttl;
+    } else {
+      if (basePath === prefix || basePath.startsWith(prefix + '/')) return ttl;
     }
   }
   return DEFAULT_CACHE_TTL;
@@ -363,7 +372,9 @@ export const api = {
     } else {
       url = `/api/projects/${projectName}/sessions/${sessionId}/messages${queryString ? `?${queryString}` : ''}`;
     }
-    return authenticatedFetch(url);
+    // Use cachedFetch for session messages - stale-while-revalidate ensures
+    // fresh data on next request while returning cached data instantly
+    return cachedFetch(url);
   },
   renameProject: (projectName, displayName) =>
     authenticatedFetch(`/api/projects/${projectName}/rename`, {
