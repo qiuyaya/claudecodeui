@@ -21,6 +21,12 @@ type UseProjectsStateArgs = {
 
 const serialize = (value: unknown) => JSON.stringify(value ?? null);
 
+const arraysShallowEqual = (a: unknown[] | undefined, b: unknown[] | undefined): boolean => {
+  if (a === b) return true;
+  if (!a || !b || a.length !== b.length) return false;
+  return a.every((item, i) => item === b[i]);
+};
+
 const projectsHaveChanges = (
   prevProjects: Project[],
   nextProjects: Project[],
@@ -40,9 +46,9 @@ const projectsHaveChanges = (
       nextProject.name !== prevProject.name ||
       nextProject.displayName !== prevProject.displayName ||
       nextProject.fullPath !== prevProject.fullPath ||
-      serialize(nextProject.sessionMeta) !== serialize(prevProject.sessionMeta) ||
-      serialize(nextProject.sessions) !== serialize(prevProject.sessions) ||
-      serialize(nextProject.taskmaster) !== serialize(prevProject.taskmaster);
+      nextProject.sessionMeta !== prevProject.sessionMeta ||
+      !arraysShallowEqual(nextProject.sessions as unknown[], prevProject.sessions as unknown[]) ||
+      nextProject.taskmaster !== prevProject.taskmaster;
 
     if (baseChanged) {
       return true;
@@ -53,9 +59,9 @@ const projectsHaveChanges = (
     }
 
     return (
-      serialize(nextProject.cursorSessions) !== serialize(prevProject.cursorSessions) ||
-      serialize(nextProject.codexSessions) !== serialize(prevProject.codexSessions) ||
-      serialize(nextProject.geminiSessions) !== serialize(prevProject.geminiSessions)
+      !arraysShallowEqual(nextProject.cursorSessions as unknown[], prevProject.cursorSessions as unknown[]) ||
+      !arraysShallowEqual(nextProject.codexSessions as unknown[], prevProject.codexSessions as unknown[]) ||
+      !arraysShallowEqual(nextProject.geminiSessions as unknown[], prevProject.geminiSessions as unknown[])
     );
   });
 };
@@ -478,35 +484,37 @@ export function useProjectsState({
     [navigate, selectedProject?.name],
   );
 
-  const sidebarSharedProps = useMemo(
+  const sidebarHandlers = useMemo(
     () => ({
-      projects,
-      selectedProject,
-      selectedSession,
       onProjectSelect: handleProjectSelect,
       onSessionSelect: handleSessionSelect,
       onNewSession: handleNewSession,
       onSessionDelete: handleSessionDelete,
       onProjectDelete: handleProjectDelete,
-      isLoading: isLoadingProjects,
-      loadingProgress,
       onRefresh: handleSidebarRefresh,
       onShowSettings: () => setShowSettings(true),
+      onCloseSettings: () => setShowSettings(false),
+    }),
+    [handleNewSession, handleProjectDelete, handleProjectSelect, handleSessionDelete, handleSessionSelect, handleSidebarRefresh],
+  );
+
+  const sidebarSharedProps = useMemo(
+    () => ({
+      projects,
+      selectedProject,
+      selectedSession,
+      ...sidebarHandlers,
+      isLoading: isLoadingProjects,
+      loadingProgress,
       showSettings,
       settingsInitialTab,
-      onCloseSettings: () => setShowSettings(false),
       isMobile,
       hasMoreProjects,
       isLoadingMoreProjects,
       onLoadMoreProjects: loadMoreProjects,
     }),
     [
-      handleNewSession,
-      handleProjectDelete,
-      handleProjectSelect,
-      handleSessionDelete,
-      handleSessionSelect,
-      handleSidebarRefresh,
+      sidebarHandlers,
       hasMoreProjects,
       isLoadingMoreProjects,
       isLoadingProjects,

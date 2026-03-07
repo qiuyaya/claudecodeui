@@ -195,7 +195,6 @@ function Sidebar({
     onSaveEditingSession: (projectName: string, sessionId: string, summary: string, provider: SessionProvider) => {
       void updateSessionSummary(projectName, sessionId, summary, provider);
     },
-    touchHandlerFactory: handleTouchClick,
     hasMoreProjects,
     isLoadingMoreProjects,
     onLoadMoreProjects: () => { void onLoadMoreProjects(); },

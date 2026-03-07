@@ -567,7 +567,7 @@ app.use(express.static(path.join(__dirname, '../dist'), {
 // Project list cache
 let projectsCache = null;
 let projectsCacheTime = 0;
-const PROJECTS_CACHE_TTL = 5 * 60 * 1000; // 5 minutes
+const PROJECTS_CACHE_TTL = 15 * 60 * 1000; // 15 minutes
 let projectsCachePromise = null;
 
 async function getCachedProjects(progressCallback) {
@@ -1991,7 +1991,8 @@ function handleShellConnection(ws) {
                         buffer: [],
                         timeoutId: null,
                         projectPath,
-                        sessionId
+                        sessionId,
+                        lastActivity: Date.now(),
                     });
 
                     // Handle data output
@@ -1999,12 +2000,14 @@ function handleShellConnection(ws) {
                         const session = ptySessionsMap.get(ptySessionKey);
                         if (!session) return;
 
+                        // Buffer with size limit and age-based expiry
                         if (session.buffer.length < 5000) {
                             session.buffer.push(data);
                         } else {
                             session.buffer.shift();
                             session.buffer.push(data);
                         }
+                        session.lastActivity = Date.now();
 
                         if (session.ws && session.ws.readyState === WebSocket.OPEN) {
                             let outputData = data;

@@ -3,6 +3,7 @@
 import { useTranslation } from 'react-i18next';
 import { Languages } from 'lucide-react';
 import { languages } from '../../../i18n/languages';
+import { loadLanguageBundle } from '../../../i18n/config';
 
 type LanguageSelectorProps = {
   compact?: boolean;
@@ -20,8 +21,9 @@ type LanguageSelectorProps = {
 export default function LanguageSelector({ compact = false }: LanguageSelectorProps) {
   const { i18n, t } = useTranslation('settings');
 
-  const handleLanguageChange = (event: React.ChangeEvent<HTMLSelectElement>) => {
+  const handleLanguageChange = async (event: React.ChangeEvent<HTMLSelectElement>) => {
     const newLanguage = event.target.value;
+    await loadLanguageBundle(newLanguage);
     i18n.changeLanguage(newLanguage);
   };
 

@@ -1,19 +1,27 @@
-import React, { useEffect } from 'react';
+import React, { lazy, Suspense, useEffect } from 'react';
 import ChatInterface from '../../chat/view/ChatInterface';
-import FileTree from '../../file-tree/view/FileTree';
-import StandaloneShell from '../../standalone-shell/view/StandaloneShell';
-import GitPanel from '../../git-panel/view/GitPanel';
 import type { MainContentProps } from '../types/types';
 import { useTaskMaster } from '../../../contexts/TaskMasterContext';
 import { useTasksSettings } from '../../../contexts/TasksSettingsContext';
 import { useUiPreferences } from '../../../hooks/useUiPreferences';
 import { useEditorSidebar } from '../../code-editor/hooks/useEditorSidebar';
-import EditorSidebar from '../../code-editor/view/EditorSidebar';
 import type { Project } from '../../../types/app';
-import { TaskMasterPanel } from '../../task-master';
 import MainContentHeader from './subcomponents/MainContentHeader';
 import MainContentStateView from './subcomponents/MainContentStateView';
 import ErrorBoundary from './ErrorBoundary';
+
+// Lazy-load heavy tab components (CodeMirror ~1.2MB, xterm ~500KB, git ~300KB)
+const StandaloneShell = lazy(() => import('../../standalone-shell/view/StandaloneShell'));
+const FileTree = lazy(() => import('../../file-tree/view/FileTree'));
+const GitPanel = lazy(() => import('../../git-panel/view/GitPanel'));
+const EditorSidebar = lazy(() => import('../../code-editor/view/EditorSidebar'));
+const TaskMasterPanel = lazy(() => import('../../task-master').then(m => ({ default: m.TaskMasterPanel })));
+
+const TabFallback = () => (
+  <div className="flex h-full items-center justify-center">
+    <div className="h-6 w-6 animate-spin rounded-full border-2 border-gray-300 border-t-blue-500" />
+  </div>
+);
 
 type TaskMasterContextValue = {
   currentProject?: Project | null;
@@ -139,28 +147,39 @@ function MainContent({
 
           {activeTab === 'files' && (
             <div className="h-full overflow-hidden">
-              <FileTree selectedProject={selectedProject} onFileOpen={handleFileOpen} />
+              <Suspense fallback={<TabFallback />}>
+                <FileTree selectedProject={selectedProject} onFileOpen={handleFileOpen} />
+              </Suspense>
             </div>
           )}
 
           {activeTab === 'shell' && (
             <div className="h-full w-full overflow-hidden">
-              <StandaloneShell project={selectedProject} session={selectedSession} showHeader={false} />
+              <Suspense fallback={<TabFallback />}>
+                <StandaloneShell project={selectedProject} session={selectedSession} showHeader={false} />
+              </Suspense>
             </div>
           )}
 
           {activeTab === 'git' && (
             <div className="h-full overflow-hidden">
-              <GitPanel selectedProject={selectedProject} isMobile={isMobile} onFileOpen={handleFileOpen} />
+              <Suspense fallback={<TabFallback />}>
+                <GitPanel selectedProject={selectedProject} isMobile={isMobile} onFileOpen={handleFileOpen} />
+              </Suspense>
             </div>
           )}
 
-          {shouldShowTasksTab && <TaskMasterPanel isVisible={activeTab === 'tasks'} />}
+          {shouldShowTasksTab && (
+            <Suspense fallback={<TabFallback />}>
+              <TaskMasterPanel isVisible={activeTab === 'tasks'} />
+            </Suspense>
+          )}
 
           <div className={`h-full overflow-hidden ${activeTab === 'preview' ? 'block' : 'hidden'}`} />
         </div>
 
-        <EditorSidebar
+        <Suspense fallback={null}>
+          <EditorSidebar
           editingFile={editingFile}
           isMobile={isMobile}
           editorExpanded={editorExpanded}
@@ -173,6 +192,7 @@ function MainContent({
           projectPath={selectedProject.path}
           fillSpace={activeTab === 'files'}
         />
+        </Suspense>
       </div>
     </div>
   );

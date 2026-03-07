@@ -21,6 +21,42 @@ const onTokenRefreshFailed = () => {
   refreshSubscribers = [];
 };
 
+// Request cache for GET requests (stores parsed JSON, not Response objects)
+const requestCache = new Map();
+const CACHE_TTL = 30000; // 30 seconds
+
+const getCached = (key) => {
+  const entry = requestCache.get(key);
+  if (entry && Date.now() - entry.timestamp < CACHE_TTL) {
+    return entry.data;
+  }
+  requestCache.delete(key);
+  return null;
+};
+
+const setCache = (key, data) => {
+  requestCache.set(key, { data, timestamp: Date.now() });
+  // Prevent cache from growing unbounded
+  if (requestCache.size > 100) {
+    const oldestKey = requestCache.keys().next().value;
+    requestCache.delete(oldestKey);
+  }
+};
+
+const invalidateCacheForUrl = (mutationUrl) => {
+  // Extract the path without query string for matching
+  const basePath = mutationUrl.split('?')[0];
+  for (const key of requestCache.keys()) {
+    // Only invalidate if paths share the same base endpoint
+    if (key.split('?')[0] === basePath) {
+      requestCache.delete(key);
+    }
+  }
+};
+
+// Request deduplication for in-flight requests
+const inflightRequests = new Map();
+
 // Refresh access token using refresh token
 const refreshAccessToken = async () => {
   const refreshToken = localStorage.getItem('refresh-token');
@@ -48,6 +84,16 @@ const refreshAccessToken = async () => {
 
 // Utility function for authenticated API calls with automatic token refresh
 export const authenticatedFetch = async (url, options = {}) => {
+  // Add timeout control (default 30s, 0 to disable)
+  const timeout = options.timeout ?? 30000;
+  let controller;
+  let timeoutId;
+
+  if (timeout > 0 && !options.signal) {
+    controller = new AbortController();
+    timeoutId = setTimeout(() => controller.abort(), timeout);
+  }
+
   const token = localStorage.getItem('auth-token');
 
   const defaultHeaders = {};
@@ -61,87 +107,142 @@ export const authenticatedFetch = async (url, options = {}) => {
     defaultHeaders['Authorization'] = `Bearer ${token}`;
   }
 
-  let response = await fetch(url, {
-    ...options,
-    headers: {
-      ...defaultHeaders,
-      ...options.headers,
-    },
-  });
+  const fetchSignal = controller?.signal ?? options.signal;
 
-  // Handle token expiration
-  if (response.status === 401 && !IS_PLATFORM) {
-    try {
-      const errorData = await response.clone().json();
+  try {
+    let response = await fetch(url, {
+      ...options,
+      ...(fetchSignal ? { signal: fetchSignal } : {}),
+      headers: {
+        ...defaultHeaders,
+        ...options.headers,
+      },
+    });
 
-      // Check if it's a token expiration error
-      if (errorData.code === 'TOKEN_EXPIRED') {
-        if (!isRefreshing) {
-          isRefreshing = true;
+    // Handle token expiration
+    if (response.status === 401 && !IS_PLATFORM) {
+      try {
+        const errorData = await response.clone().json();
 
-          try {
-            // Refresh the token
-            const newToken = await refreshAccessToken();
-            localStorage.setItem('auth-token', newToken);
-            isRefreshing = false;
-            onTokenRefreshed(newToken);
+        // Check if it's a token expiration error
+        if (errorData.code === 'TOKEN_EXPIRED') {
+          if (!isRefreshing) {
+            isRefreshing = true;
 
-            // Retry the original request with new token
+            try {
+              // Refresh the token
+              const newToken = await refreshAccessToken();
+              localStorage.setItem('auth-token', newToken);
+              isRefreshing = false;
+              onTokenRefreshed(newToken);
+
+              // Retry the original request with new token
+              defaultHeaders['Authorization'] = `Bearer ${newToken}`;
+              response = await fetch(url, {
+                ...options,
+                ...(fetchSignal ? { signal: fetchSignal } : {}),
+                headers: {
+                  ...defaultHeaders,
+                  ...options.headers,
+                },
+              });
+            } catch (error) {
+              isRefreshing = false;
+              onTokenRefreshFailed();
+              // Refresh failed, clear tokens and let AuthContext handle redirect
+              localStorage.removeItem('auth-token');
+              localStorage.removeItem('refresh-token');
+              window.dispatchEvent(new Event('auth-token-expired'));
+              throw error;
+            }
+          } else {
+            // Wait for the ongoing refresh to complete
+            const newToken = await new Promise((resolve) => {
+              subscribeTokenRefresh(resolve);
+            });
+
+            // If refresh failed, return original response
+            if (!newToken) {
+              return response;
+            }
+
+            // Retry with new token
             defaultHeaders['Authorization'] = `Bearer ${newToken}`;
             response = await fetch(url, {
               ...options,
+              ...(fetchSignal ? { signal: fetchSignal } : {}),
               headers: {
                 ...defaultHeaders,
                 ...options.headers,
               },
             });
-          } catch (error) {
-            isRefreshing = false;
-            onTokenRefreshFailed();
-            // Refresh failed, clear tokens and let AuthContext handle redirect
-            localStorage.removeItem('auth-token');
-            localStorage.removeItem('refresh-token');
-            window.dispatchEvent(new Event('auth-token-expired'));
-            throw error;
           }
-        } else {
-          // Wait for the ongoing refresh to complete
-          const newToken = await new Promise((resolve) => {
-            subscribeTokenRefresh(resolve);
-          });
-
-          // If refresh failed, return original response
-          if (!newToken) {
-            return response;
-          }
-
-          // Retry with new token
-          defaultHeaders['Authorization'] = `Bearer ${newToken}`;
-          response = await fetch(url, {
-            ...options,
-            headers: {
-              ...defaultHeaders,
-              ...options.headers,
-            },
-          });
+        }
+      } catch (error) {
+        // If we can't parse the error or it's not a token error, just return the original response
+        if (error.message !== 'Token refresh failed') {
+          return response;
         }
       }
-    } catch (error) {
-      // If we can't parse the error or it's not a token error, just return the original response
-      if (error.message !== 'Token refresh failed') {
-        return response;
-      }
     }
+
+    return response;
+  } finally {
+    if (timeoutId) clearTimeout(timeoutId);
+  }
+};
+
+const cachedFetch = async (url, options = {}) => {
+  const method = (options.method || 'GET').toUpperCase();
+
+  // Only cache GET requests
+  if (method !== 'GET') {
+    invalidateCacheForUrl(url);
+    return authenticatedFetch(url, options);
   }
 
-  return response;
+  // Check cache first — return a synthetic Response wrapping cached JSON
+  const cached = getCached(url);
+  if (cached !== null) {
+    return new Response(JSON.stringify(cached), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    });
+  }
+
+  // Deduplicate in-flight requests
+  if (inflightRequests.has(url)) {
+    // Clone the result so each caller gets their own consumable Response
+    return inflightRequests.get(url).then(r => r.clone());
+  }
+
+  const requestPromise = authenticatedFetch(url, options).then(async (response) => {
+    inflightRequests.delete(url);
+    // Cache parsed JSON for successful responses
+    if (response.ok) {
+      try {
+        const cloned = response.clone();
+        const json = await cloned.json();
+        setCache(url, json);
+      } catch {
+        // Response is not JSON — skip caching
+      }
+    }
+    return response;
+  }).catch(err => {
+    inflightRequests.delete(url);
+    throw err;
+  });
+
+  inflightRequests.set(url, requestPromise);
+  return requestPromise;
 };
 
 // API endpoints
 export const api = {
   // Auth endpoints (no token required)
   auth: {
-    status: () => fetch('/api/auth/status'),
+    status: () => cachedFetch('/api/auth/status'),
     login: (username, password) => fetch('/api/auth/login', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -152,7 +253,7 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ username, password }),
     }),
-    user: () => authenticatedFetch('/api/auth/user'),
+    user: () => cachedFetch('/api/auth/user'),
     logout: () => {
       const refreshToken = localStorage.getItem('refresh-token');
       return authenticatedFetch('/api/auth/logout', {
@@ -171,10 +272,10 @@ export const api = {
   // config endpoint removed - no longer needed (frontend uses window.location)
   projects: (limit = 0, offset = 0) => {
     const params = limit > 0 ? `?limit=${limit}&offset=${offset}` : '';
-    return authenticatedFetch(`/api/projects${params}`);
+    return cachedFetch(`/api/projects${params}`);
   },
   sessions: (projectName, limit = 5, offset = 0) =>
-    authenticatedFetch(`/api/projects/${projectName}/sessions?limit=${limit}&offset=${offset}`),
+    cachedFetch(`/api/projects/${projectName}/sessions?limit=${limit}&offset=${offset}`),
   sessionMessages: (projectName, sessionId, limit = null, offset = 0, provider = 'claude') => {
     const params = new URLSearchParams();
     if (limit !== null) {
@@ -243,14 +344,14 @@ export const api = {
       body: JSON.stringify(workspaceData),
     }),
   readFile: (projectName, filePath) =>
-    authenticatedFetch(`/api/projects/${projectName}/file?filePath=${encodeURIComponent(filePath)}`),
+    cachedFetch(`/api/projects/${projectName}/file?filePath=${encodeURIComponent(filePath)}`),
   saveFile: (projectName, filePath, content) =>
     authenticatedFetch(`/api/projects/${projectName}/file`, {
       method: 'PUT',
       body: JSON.stringify({ filePath, content }),
     }),
   getFiles: (projectName, options = {}) =>
-    authenticatedFetch(`/api/projects/${projectName}/files`, options),
+    cachedFetch(`/api/projects/${projectName}/files`, options),
 
   // File operations
   createFile: (projectName, { path, type, name }) =>
@@ -309,7 +410,7 @@ export const api = {
 
     // Get available PRD templates
     getTemplates: () =>
-      authenticatedFetch('/api/taskmaster/prd-templates'),
+      cachedFetch('/api/taskmaster/prd-templates'),
 
     // Apply a PRD template
     applyTemplate: (projectName, { templateId, fileName, customizations }) =>
@@ -331,7 +432,7 @@ export const api = {
     const params = new URLSearchParams();
     if (dirPath) params.append('path', dirPath);
 
-    return authenticatedFetch(`/api/browse-filesystem?${params}`);
+    return cachedFetch(`/api/browse-filesystem?${params}`);
   },
 
   createFolder: (folderPath) =>
@@ -342,13 +443,13 @@ export const api = {
 
   // User endpoints
   user: {
-    gitConfig: () => authenticatedFetch('/api/user/git-config'),
+    gitConfig: () => cachedFetch('/api/user/git-config'),
     updateGitConfig: (gitName, gitEmail) =>
       authenticatedFetch('/api/user/git-config', {
         method: 'POST',
         body: JSON.stringify({ gitName, gitEmail }),
       }),
-    onboardingStatus: () => authenticatedFetch('/api/user/onboarding-status'),
+    onboardingStatus: () => cachedFetch('/api/user/onboarding-status'),
     completeOnboarding: () =>
       authenticatedFetch('/api/user/complete-onboarding', {
         method: 'POST',
@@ -356,7 +457,7 @@ export const api = {
   },
 
   // Generic GET method for any endpoint
-  get: (endpoint) => authenticatedFetch(`/api${endpoint}`),
+  get: (endpoint) => cachedFetch(`/api${endpoint}`),
 
   // Generic POST method for any endpoint
   post: (endpoint, body) => authenticatedFetch(`/api${endpoint}`, {

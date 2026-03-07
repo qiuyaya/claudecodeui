@@ -2,11 +2,14 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useRef, use
 import { useAuth } from '../components/auth/context/AuthContext';
 import { IS_PLATFORM } from '../constants/config';
 
+type MessageHandler = (message: any) => void;
+
 type WebSocketContextType = {
   ws: WebSocket | null;
   sendMessage: (message: any) => void;
   latestMessage: any | null;
   isConnected: boolean;
+  subscribe: (handler: MessageHandler) => () => void;
 };
 
 const WebSocketContext = createContext<WebSocketContextType | null>(null);
@@ -32,6 +35,9 @@ const useWebSocketProviderState = (): WebSocketContextType => {
   const [isConnected, setIsConnected] = useState(false);
   const reconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const connectRef = useRef<() => void>(() => {});
+  const subscribersRef = useRef<Set<MessageHandler>>(new Set());
+  const reconnectAttemptsRef = useRef(0);
+  const MAX_RECONNECT_DELAY = 30000;
   const { token } = useAuth();
 
   useEffect(() => {
@@ -61,12 +67,20 @@ const useWebSocketProviderState = (): WebSocketContextType => {
     websocket.onopen = () => {
       setIsConnected(true);
       wsRef.current = websocket;
+      reconnectAttemptsRef.current = 0;
     };
 
     websocket.onmessage = (event) => {
       try {
         const data = JSON.parse(event.data);
         setLatestMessage(data);
+        subscribersRef.current.forEach(handler => {
+          try {
+            handler(data);
+          } catch (err) {
+            console.error('WebSocket subscriber error:', err);
+          }
+        });
       } catch (error) {
         console.error('Error parsing WebSocket message:', error);
       }
@@ -76,11 +90,16 @@ const useWebSocketProviderState = (): WebSocketContextType => {
       setIsConnected(false);
       wsRef.current = null;
 
-      // Attempt to reconnect after 3 seconds
+      const attempt = reconnectAttemptsRef.current;
+      const baseDelay = Math.min(1000 * Math.pow(2, attempt), MAX_RECONNECT_DELAY);
+      const jitter = Math.random() * 1000;
+      const delay = baseDelay + jitter;
+
       reconnectTimeoutRef.current = setTimeout(() => {
-        if (unmountedRef.current) return; // Prevent reconnection if unmounted
+        if (unmountedRef.current) return;
+        reconnectAttemptsRef.current += 1;
         connectRef.current();
-      }, 3000);
+      }, delay);
     };
 
     websocket.onerror = (error) => {
@@ -131,13 +150,19 @@ const useWebSocketProviderState = (): WebSocketContextType => {
     }
   }, []);
 
+  const subscribe = useCallback((handler: MessageHandler) => {
+    subscribersRef.current.add(handler);
+    return () => { subscribersRef.current.delete(handler); };
+  }, []);
+
   const value: WebSocketContextType = useMemo(() =>
   ({
     ws: isConnected ? wsRef.current : null,
     sendMessage,
     latestMessage,
-    isConnected
-  }), [sendMessage, latestMessage, isConnected]);
+    isConnected,
+    subscribe
+  }), [sendMessage, latestMessage, isConnected, subscribe]);
 
   return value;
 };

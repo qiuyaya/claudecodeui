@@ -1,7 +1,7 @@
 import { memo, useEffect, useRef } from 'react';
 import { CheckSquare, Loader2, Square, Trash2 } from 'lucide-react';
 import type { TFunction } from 'i18next';
-import { Button } from '../../../ui/button';
+import { Button } from '../../../../shared/view/ui/Button';
 import type { LoadingProgress, Project, ProjectSession, SessionProvider } from '../../../../types/app';
 import type {
   LoadingSessionsByProject,

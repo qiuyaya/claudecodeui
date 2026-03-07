@@ -409,6 +409,11 @@ function handleShellConnection(ws) {
                 console.log('⏳ PTY session kept alive, will timeout in 30 minutes:', ptySessionKey);
                 session.ws = null;
 
+                // Trim buffer to last 500 entries to prevent memory bloat while disconnected
+                if (session.buffer.length > 500) {
+                    session.buffer = session.buffer.slice(-500);
+                }
+
                 clearTimeout(session.timeoutId);
                 session.timeoutId = setTimeout(() => {
                     console.log('⏰ PTY session timeout, killing process:', ptySessionKey);

@@ -373,75 +373,83 @@ export function useChatRealtimeHandlers({
 
         if (structuredMessageData && Array.isArray(structuredMessageData.content)) {
           const parentToolUseId = rawStructuredData?.parentToolUseId;
+          const newMessages: ChatMessage[] = [];
+          const childToolUpdates: Array<{parentId: string, childTool: any}> = [];
 
           structuredMessageData.content.forEach((part: any) => {
             if (part.type === 'tool_use') {
-              const toolInput = part.input ? JSON.stringify(part.input, null, 2) : '';
-
               // Check if this is a child tool from a subagent
               if (parentToolUseId) {
-                setChatMessages((previous) =>
-                  previous.map((message) => {
-                    if (message.toolId === parentToolUseId && message.isSubagentContainer) {
-                      const childTool = {
-                        toolId: part.id,
-                        toolName: part.name,
-                        toolInput: part.input,
-                        toolResult: null,
-                        timestamp: new Date(),
-                      };
-                      const existingChildren = message.subagentState?.childTools || [];
-                      return {
-                        ...message,
-                        subagentState: {
-                          childTools: [...existingChildren, childTool],
-                          currentToolIndex: existingChildren.length,
-                          isComplete: false,
-                        },
-                      };
-                    }
-                    return message;
-                  }),
-                );
+                childToolUpdates.push({
+                  parentId: parentToolUseId,
+                  childTool: {
+                    toolId: part.id,
+                    toolName: part.name,
+                    toolInput: part.input,
+                    toolResult: null,
+                    timestamp: new Date(),
+                  },
+                });
                 return;
               }
 
               // Check if this is a Task tool (subagent container)
               const isSubagentContainer = part.name === 'Task';
 
-              setChatMessages((previous) => [
-                ...previous,
-                {
-                  type: 'assistant',
-                  content: '',
-                  timestamp: new Date(),
-                  isToolUse: true,
-                  toolName: part.name,
-                  toolInput,
-                  toolId: part.id,
-                  toolResult: null,
-                  isSubagentContainer,
-                  subagentState: isSubagentContainer
-                    ? { childTools: [], currentToolIndex: -1, isComplete: false }
-                    : undefined,
-                },
-              ]);
+              newMessages.push({
+                type: 'assistant',
+                content: '',
+                timestamp: new Date(),
+                isToolUse: true,
+                toolName: part.name,
+                toolInput: part.input ? JSON.stringify(part.input, null, 2) : '',
+                toolId: part.id,
+                toolResult: null,
+                isSubagentContainer,
+                subagentState: isSubagentContainer
+                  ? { childTools: [], currentToolIndex: -1, isComplete: false }
+                  : undefined,
+              });
               return;
             }
 
             if (part.type === 'text' && part.text?.trim()) {
               let content = decodeHtmlEntities(part.text);
               content = stripAnsi(formatUsageLimitText(content));
-              setChatMessages((previous) => [
-                ...previous,
-                {
-                  type: 'assistant',
-                  content,
-                  timestamp: new Date(),
-                },
-              ]);
+              newMessages.push({
+                type: 'assistant',
+                content,
+                timestamp: new Date(),
+              });
             }
           });
+
+          // Apply all updates in a single setChatMessages call
+          if (newMessages.length > 0 || childToolUpdates.length > 0) {
+            setChatMessages((previous) => {
+              let updated = previous;
+              if (childToolUpdates.length > 0) {
+                updated = updated.map((message) => {
+                  const updates = childToolUpdates.filter(
+                    (u) => u.parentId === message.toolId && message.isSubagentContainer,
+                  );
+                  if (updates.length > 0) {
+                    const existingChildren = message.subagentState?.childTools || [];
+                    return {
+                      ...message,
+                      subagentState: {
+                        childTools: [...existingChildren, ...updates.map((u) => u.childTool)],
+                        currentToolIndex: existingChildren.length + updates.length - 1,
+                        isComplete: false,
+                      },
+                    };
+                  }
+                  return message;
+                });
+              }
+              return [...updated, ...newMessages];
+            });
+          }
         } else if (structuredMessageData && typeof structuredMessageData.content === 'string' && structuredMessageData.content.trim()) {
           let content = decodeHtmlEntities(structuredMessageData.content);
           content = stripAnsi(formatUsageLimitText(content));
@@ -457,60 +465,67 @@ export function useChatRealtimeHandlers({
 
         if (structuredMessageData?.role === 'user' && Array.isArray(structuredMessageData.content)) {
           const parentToolUseId = rawStructuredData?.parentToolUseId;
+          const toolResultParts = structuredMessageData.content.filter(
+            (part: any) => part.type === 'tool_result',
+          );
 
-          structuredMessageData.content.forEach((part: any) => {
-            if (part.type !== 'tool_result') {
-              return;
-            }
-
+          if (toolResultParts.length > 0) {
             setChatMessages((previous) =>
               previous.map((message) => {
-                // Handle child tool results (route to parent's subagentState)
-                if (parentToolUseId && message.toolId === parentToolUseId && message.isSubagentContainer) {
-                  return {
-                    ...message,
-                    subagentState: {
-                      ...message.subagentState!,
-                      childTools: message.subagentState!.childTools.map((child) => {
-                        if (child.toolId === part.tool_use_id) {
-                          return {
-                            ...child,
-                            toolResult: {
-                              content: part.content,
-                              isError: part.is_error,
-                              timestamp: new Date(),
-                            },
-                          };
-                        }
-                        return child;
-                      }),
-                    },
-                  };
+                let updated = message;
+
+                for (const part of toolResultParts) {
+                  // Handle child tool results (route to parent's subagentState)
+                  if (parentToolUseId && updated.toolId === parentToolUseId && updated.isSubagentContainer) {
+                    updated = {
+                      ...updated,
+                      subagentState: {
+                        ...updated.subagentState!,
+                        childTools: updated.subagentState!.childTools.map((child) => {
+                          if (child.toolId === part.tool_use_id) {
+                            return {
+                              ...child,
+                              toolResult: {
+                                content: part.content,
+                                isError: part.is_error,
+                                timestamp: new Date(),
+                              },
+                            };
+                          }
+                          return child;
+                        }),
+                      },
+                    };
+                    continue;
+                  }
+
+                  // Handle normal tool results (including parent Task tool completion)
+                  if (updated.isToolUse && updated.toolId === part.tool_use_id) {
+                    updated = {
+                      ...updated,
+                      toolResult: {
+                        content: typeof part.content === 'string' ? stripAnsi(part.content) : stripAnsi(JSON.stringify(part.content)),
+                        isError: part.is_error,
+                        timestamp: new Date(),
+                      },
+                    };
+                    // Mark subagent as complete when parent Task receives its result
+                    if (updated.isSubagentContainer && updated.subagentState) {
+                      updated = {
+                        ...updated,
+                        subagentState: {
+                          ...updated.subagentState,
+                          isComplete: true,
+                        },
+                      };
+                    }
+                  }
                 }
 
-                // Handle normal tool results (including parent Task tool completion)
-                if (message.isToolUse && message.toolId === part.tool_use_id) {
-                  const result = {
-                    ...message,
-                    toolResult: {
-                      content: typeof part.content === 'string' ? stripAnsi(part.content) : stripAnsi(JSON.stringify(part.content)),
-                      isError: part.is_error,
-                      timestamp: new Date(),
-                    },
-                  };
-                  // Mark subagent as complete when parent Task receives its result
-                  if (message.isSubagentContainer && message.subagentState) {
-                    result.subagentState = {
-                      ...message.subagentState,
-                      isComplete: true,
-                    };
-                  }
-                  return result;
-                }
-                return message;
+                return updated;
               }),
             );
-          });
+          }
         }
         break;
       }

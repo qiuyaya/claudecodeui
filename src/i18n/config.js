@@ -3,9 +3,9 @@
  *
  * Configures i18next for internationalization support.
  * Features:
- * - Lazy-loading of translation namespaces
+ * - Lazy-loading of non-default language bundles
  * - Language detection from localStorage
- * - Fallback to English for missing translations
+ * - Fallback to zh-CN for missing translations
  * - Development mode warnings for missing keys
  */
 
@@ -14,24 +14,7 @@ import { initReactI18next } from 'react-i18next';
 // eslint-disable-next-line import-x/order
 import LanguageDetector from 'i18next-browser-languagedetector';
 
-// Import translation resources
-import enCommon from './locales/en/common.json';
-import enSettings from './locales/en/settings.json';
-import enAuth from './locales/en/auth.json';
-import enSidebar from './locales/en/sidebar.json';
-import enChat from './locales/en/chat.json';
-import enCodeEditor from './locales/en/codeEditor.json';
-// eslint-disable-next-line import-x/order
-import enTasks from './locales/en/tasks.json';
-
-import koCommon from './locales/ko/common.json';
-import koSettings from './locales/ko/settings.json';
-import koAuth from './locales/ko/auth.json';
-import koSidebar from './locales/ko/sidebar.json';
-import koChat from './locales/ko/chat.json';
-// eslint-disable-next-line import-x/order
-import koCodeEditor from './locales/ko/codeEditor.json';
-
+// Only import the default language (zh-CN) statically - others loaded on demand
 import zhCommon from './locales/zh-CN/common.json';
 import zhSettings from './locales/zh-CN/settings.json';
 import zhAuth from './locales/zh-CN/auth.json';
@@ -40,17 +23,47 @@ import zhChat from './locales/zh-CN/chat.json';
 // eslint-disable-next-line import-x/order
 import zhCodeEditor from './locales/zh-CN/codeEditor.json';
 
-import jaCommon from './locales/ja/common.json';
-import jaSettings from './locales/ja/settings.json';
-import jaAuth from './locales/ja/auth.json';
-import jaSidebar from './locales/ja/sidebar.json';
-import jaChat from './locales/ja/chat.json';
-import jaCodeEditor from './locales/ja/codeEditor.json';
-// eslint-disable-next-line import-x/order
-import jaTasks from './locales/ja/tasks.json';
-
 // Import supported languages configuration
 import { languages } from './languages.js';
+
+// Lazy-load language bundles
+const languageLoaders = {
+  en: () => Promise.all([
+    import('./locales/en/common.json'),
+    import('./locales/en/settings.json'),
+    import('./locales/en/auth.json'),
+    import('./locales/en/sidebar.json'),
+    import('./locales/en/chat.json'),
+    import('./locales/en/codeEditor.json'),
+    import('./locales/en/tasks.json'),
+  ]).then(([common, settings, auth, sidebar, chat, codeEditor, tasks]) => ({
+    common: common.default, settings: settings.default, auth: auth.default,
+    sidebar: sidebar.default, chat: chat.default, codeEditor: codeEditor.default, tasks: tasks.default,
+  })),
+  ko: () => Promise.all([
+    import('./locales/ko/common.json'),
+    import('./locales/ko/settings.json'),
+    import('./locales/ko/auth.json'),
+    import('./locales/ko/sidebar.json'),
+    import('./locales/ko/chat.json'),
+    import('./locales/ko/codeEditor.json'),
+  ]).then(([common, settings, auth, sidebar, chat, codeEditor]) => ({
+    common: common.default, settings: settings.default, auth: auth.default,
+    sidebar: sidebar.default, chat: chat.default, codeEditor: codeEditor.default,
+  })),
+  ja: () => Promise.all([
+    import('./locales/ja/common.json'),
+    import('./locales/ja/settings.json'),
+    import('./locales/ja/auth.json'),
+    import('./locales/ja/sidebar.json'),
+    import('./locales/ja/chat.json'),
+    import('./locales/ja/codeEditor.json'),
+    import('./locales/ja/tasks.json'),
+  ]).then(([common, settings, auth, sidebar, chat, codeEditor, tasks]) => ({
+    common: common.default, settings: settings.default, auth: auth.default,
+    sidebar: sidebar.default, chat: chat.default, codeEditor: codeEditor.default, tasks: tasks.default,
+  })),
+};
 
 // Get saved language preference from localStorage
 const getSavedLanguage = () => {
@@ -66,30 +79,16 @@ const getSavedLanguage = () => {
   }
 };
 
+const savedLng = getSavedLanguage();
+
 // Initialize i18next
 i18n
   .use(LanguageDetector) // Detect user language
   .use(initReactI18next) // Pass i18n instance to react-i18next
   .init({
-    // Resources containing all translations
+    // Only bundle default language; others loaded on demand
+    partialBundledLanguages: true,
     resources: {
-      en: {
-        common: enCommon,
-        settings: enSettings,
-        auth: enAuth,
-        sidebar: enSidebar,
-        chat: enChat,
-        codeEditor: enCodeEditor,
-        tasks: enTasks,
-      },
-      ko: {
-        common: koCommon,
-        settings: koSettings,
-        auth: koAuth,
-        sidebar: koSidebar,
-        chat: koChat,
-        codeEditor: koCodeEditor,
-      },
       'zh-CN': {
         common: zhCommon,
         settings: zhSettings,
@@ -98,19 +97,10 @@ i18n
         chat: zhChat,
         codeEditor: zhCodeEditor,
       },
-      ja: {
-        common: jaCommon,
-        settings: jaSettings,
-        auth: jaAuth,
-        sidebar: jaSidebar,
-        chat: jaChat,
-        codeEditor: jaCodeEditor,
-        tasks: jaTasks,
-      },
     },
 
-    // Default language
-    lng: getSavedLanguage(),
+    // Always start with zh-CN to avoid flicker; switch after bundle loads
+    lng: 'zh-CN',
 
     // Fallback language when a translation is missing
     fallbackLng: 'zh-CN',
@@ -156,7 +146,30 @@ i18n
     },
   });
 
-// Save language preference when it changes
+// Load non-default language on startup if needed
+export const loadLanguageBundle = async (lng) => {
+  if (lng === 'zh-CN' || !languageLoaders[lng]) return;
+  if (i18n.hasResourceBundle(lng, 'common')) return;
+
+  try {
+    const bundles = await languageLoaders[lng]();
+    for (const [ns, data] of Object.entries(bundles)) {
+      i18n.addResourceBundle(lng, ns, data, true, true);
+    }
+  } catch (error) {
+    console.error(`Failed to load language bundle for ${lng}:`, error);
+  }
+};
+
+// Load saved language if it's not the default
+if (savedLng && savedLng !== 'zh-CN') {
+  loadLanguageBundle(savedLng).then(() => {
+    // Switch only after bundles are loaded — no flicker
+    i18n.changeLanguage(savedLng);
+  });
+}
+
+// Save language preference and lazy-load bundles when language changes
 i18n.on('languageChanged', (lng) => {
   try {
     localStorage.setItem('userLanguage', lng);

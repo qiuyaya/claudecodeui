@@ -437,7 +437,12 @@ async function getProjects(progressCallback = null) {
 
     totalProjects = directories.length + manualProjectsCount;
 
-    for (const entry of directories) {
+    // Process directories with limited concurrency to avoid fd exhaustion
+    const CONCURRENCY_LIMIT = 10;
+    const results = [];
+    for (let i = 0; i < directories.length; i += CONCURRENCY_LIMIT) {
+      const chunk = directories.slice(i, i + CONCURRENCY_LIMIT);
+      const chunkResults = await Promise.all(chunk.map(async (entry) => {
       processedProjects++;
 
       // Emit progress
@@ -472,77 +477,62 @@ async function getProjects(progressCallback = null) {
         }
       };
 
-      // Try to get sessions for this project (just first 5 for performance)
-      try {
-        const sessionResult = await getSessions(entry.name, 5, 0);
-        project.sessions = sessionResult.sessions || [];
-        project.sessionMeta = {
-          hasMore: sessionResult.hasMore,
-          total: sessionResult.total
-        };
-      } catch (e) {
-        console.warn(`Could not load sessions for project ${entry.name}:`, e.message);
-        project.sessionMeta = {
-          hasMore: false,
-          total: 0
-        };
-      }
+      // Load all session types in parallel
+      const [sessionResult, cursorSessions, codexSessions, geminiResult, taskMasterResult] = await Promise.all([
+        getSessions(entry.name, 5, 0).catch(e => {
+          console.warn(`Could not load sessions for project ${entry.name}:`, e.message);
+          return { sessions: [], hasMore: false, total: 0 };
+        }),
+        getCursorSessions(actualProjectDir).catch(e => {
+          console.warn(`Could not load Cursor sessions for project ${entry.name}:`, e.message);
+          return [];
+        }),
+        getCodexSessions(actualProjectDir, { indexRef: codexSessionsIndexRef }).catch(e => {
+          console.warn(`Could not load Codex sessions for project ${entry.name}:`, e.message);
+          return [];
+        }),
+        (async () => {
+          try {
+            const uiSessions = sessionManager.getProjectSessions(actualProjectDir) || [];
+            const cliSessions = await getGeminiCliSessions(actualProjectDir);
+            const uiIds = new Set(uiSessions.map(s => s.id));
+            return [...uiSessions, ...cliSessions.filter(s => !uiIds.has(s.id))];
+          } catch (e) {
+            console.warn(`Could not load Gemini sessions for project ${entry.name}:`, e.message);
+            return [];
+          }
+        })(),
+        detectTaskMasterFolder(actualProjectDir).catch(e => {
+          console.warn(`Could not detect TaskMaster for project ${entry.name}:`, e.message);
+          return { hasTaskmaster: false, hasEssentialFiles: false, metadata: null };
+        }),
+      ]);
+
+      project.sessions = sessionResult.sessions || [];
+      project.sessionMeta = { hasMore: sessionResult.hasMore, total: sessionResult.total };
       applyCustomSessionNames(project.sessions, 'claude');
 
-      // Also fetch Cursor sessions for this project
-      try {
-        project.cursorSessions = await getCursorSessions(actualProjectDir);
-      } catch (e) {
-        console.warn(`Could not load Cursor sessions for project ${entry.name}:`, e.message);
-        project.cursorSessions = [];
-      }
+      project.cursorSessions = cursorSessions;
       applyCustomSessionNames(project.cursorSessions, 'cursor');
 
-      // Also fetch Codex sessions for this project
-      try {
-        project.codexSessions = await getCodexSessions(actualProjectDir, {
-          indexRef: codexSessionsIndexRef,
-        });
-      } catch (e) {
-        console.warn(`Could not load Codex sessions for project ${entry.name}:`, e.message);
-        project.codexSessions = [];
-      }
+      project.codexSessions = codexSessions;
       applyCustomSessionNames(project.codexSessions, 'codex');
 
-      // Also fetch Gemini sessions for this project (UI + CLI)
-      try {
-        const uiSessions = sessionManager.getProjectSessions(actualProjectDir) || [];
-        const cliSessions = await getGeminiCliSessions(actualProjectDir);
-        const uiIds = new Set(uiSessions.map(s => s.id));
-        const mergedGemini = [...uiSessions, ...cliSessions.filter(s => !uiIds.has(s.id))];
-        project.geminiSessions = mergedGemini;
-      } catch (e) {
-        console.warn(`Could not load Gemini sessions for project ${entry.name}:`, e.message);
-        project.geminiSessions = [];
-      }
+      project.geminiSessions = geminiResult;
       applyCustomSessionNames(project.geminiSessions, 'gemini');
 
-      // Add TaskMaster detection
-      try {
-        const taskMasterResult = await detectTaskMasterFolder(actualProjectDir);
-        project.taskmaster = {
-          hasTaskmaster: taskMasterResult.hasTaskmaster,
-          hasEssentialFiles: taskMasterResult.hasEssentialFiles,
-          metadata: taskMasterResult.metadata,
-          status: taskMasterResult.hasTaskmaster && taskMasterResult.hasEssentialFiles ? 'configured' : 'not-configured'
-        };
-      } catch (e) {
-        console.warn(`Could not detect TaskMaster for project ${entry.name}:`, e.message);
-        project.taskmaster = {
-          hasTaskmaster: false,
-          hasEssentialFiles: false,
-          metadata: null,
-          status: 'error'
-        };
-      }
+      project.taskmaster = {
+        hasTaskmaster: taskMasterResult.hasTaskmaster,
+        hasEssentialFiles: taskMasterResult.hasEssentialFiles,
+        metadata: taskMasterResult.metadata,
+        status: taskMasterResult.hasTaskmaster && taskMasterResult.hasEssentialFiles ? 'configured' : 'not-configured'
+      };
 
-      projects.push(project);
+      return project;
+    }));
+      results.push(...chunkResults);
     }
+    projects.push(...results);
   } catch (error) {
     // If the directory doesn't exist (ENOENT), that's okay - just continue with empty projects
     if (error.code !== 'ENOENT') {
