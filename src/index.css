@@ -2,6 +2,21 @@
 @tailwind components;
 @tailwind utilities;
 
+/* Streaming cursor animation for typing effect */
+@keyframes blink-cursor {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0; }
+}
+
+.streaming-cursor > *:last-child::after {
+  content: '▍';
+  display: inline;
+  animation: blink-cursor 1s step-end infinite;
+  color: currentColor;
+  opacity: 0.7;
+  margin-left: 1px;
+}
+
 /* Global spinner animation - defined early to ensure it loads */
 @keyframes spin {
   0% {

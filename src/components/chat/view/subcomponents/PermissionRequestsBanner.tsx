@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect } from 'react';
 import type { PendingPermissionRequest } from '../../types/types';
 import { buildClaudeToolPermissionEntry, formatToolInputForDisplay } from '../../utils/chatPermissions';
 import { getClaudeSettings } from '../../utils/chatStorage';
@@ -16,17 +16,50 @@ interface PermissionRequestsBannerProps {
   handleGrantToolPermission: (suggestion: { entry: string; toolName: string }) => { success: boolean };
 }
 
+// Send browser notification for permission requests
+function notifyPermissionRequest(toolName: string) {
+  if (!('Notification' in window)) return;
+  if (document.hasFocus()) return; // Don't notify if tab is focused
+
+  if (Notification.permission === 'granted') {
+    new Notification('Permission Required', {
+      body: `Tool "${toolName}" needs your approval`,
+      icon: '/favicon.png',
+      tag: 'permission-request', // Deduplicate
+    });
+  } else if (Notification.permission === 'default') {
+    Notification.requestPermission().then(permission => {
+      if (permission === 'granted') {
+        new Notification('Permission Required', {
+          body: `Tool "${toolName}" needs your approval`,
+          icon: '/favicon.png',
+          tag: 'permission-request',
+        });
+      }
+    });
+  }
+}
+
 export default function PermissionRequestsBanner({
   pendingPermissionRequests,
   handlePermissionDecision,
   handleGrantToolPermission,
 }: PermissionRequestsBannerProps) {
+
+  // Browser notification when new permission requests arrive
+  useEffect(() => {
+    if (pendingPermissionRequests.length > 0) {
+      const latest = pendingPermissionRequests[pendingPermissionRequests.length - 1];
+      notifyPermissionRequest(latest.toolName);
+    }
+  }, [pendingPermissionRequests]);
+
   if (!pendingPermissionRequests.length) {
     return null;
   }
 
   return (
-    <div className="mb-3 space-y-2">
+    <div className="sticky bottom-0 z-20 mb-3 space-y-2">
       {pendingPermissionRequests.map((request) => {
         const CustomPanel = getPermissionPanel(request.toolName);
         if (CustomPanel) {
@@ -56,13 +89,19 @@ export default function PermissionRequestsBanner({
         return (
           <div
             key={request.requestId}
-            className="rounded-lg border border-amber-200 bg-amber-50 p-3 shadow-sm dark:border-amber-800 dark:bg-amber-900/20"
+            className="animate-in slide-in-from-bottom rounded-lg border-2 border-amber-300 bg-amber-50 p-3 shadow-lg ring-2 ring-amber-200/50 dark:border-amber-700 dark:bg-amber-900/30 dark:ring-amber-800/30"
           >
             <div className="flex flex-wrap items-start justify-between gap-3">
-              <div>
-                <div className="text-sm font-semibold text-amber-900 dark:text-amber-100">Permission required</div>
-                <div className="text-xs text-amber-800 dark:text-amber-200">
-                  Tool: <span className="font-mono">{request.toolName}</span>
+              <div className="flex items-center gap-2">
+                <span className="relative flex h-3 w-3">
+                  <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-amber-400 opacity-75" />
+                  <span className="relative inline-flex h-3 w-3 rounded-full bg-amber-500" />
+                </span>
+                <div>
+                  <div className="text-sm font-semibold text-amber-900 dark:text-amber-100">Permission required</div>
+                  <div className="text-xs text-amber-800 dark:text-amber-200">
+                    Tool: <span className="font-mono">{request.toolName}</span>
+                  </div>
                 </div>
               </div>
               {permissionEntry && (

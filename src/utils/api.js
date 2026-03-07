@@ -23,12 +23,37 @@ const onTokenRefreshFailed = () => {
 
 // Request cache for GET requests (stores parsed JSON, not Response objects)
 const requestCache = new Map();
-const CACHE_TTL = 30000; // 30 seconds
+const DEFAULT_CACHE_TTL = 30000; // 30 seconds default
+
+// Per-endpoint cache TTL overrides (longer TTL for infrequently changing data)
+const CACHE_TTL_OVERRIDES = {
+  '/api/projects': 300000,          // 5 minutes - project list changes rarely
+  '/api/auth/status': 120000,       // 2 minutes
+  '/api/auth/user': 120000,         // 2 minutes
+  '/api/user/git-config': 300000,   // 5 minutes
+  '/api/user/onboarding-status': 300000,
+  '/api/taskmaster/prd-templates': 600000, // 10 minutes
+  '/api/browse-filesystem': 60000,  // 1 minute
+};
+
+const getCacheTTL = (url) => {
+  const basePath = url.split('?')[0];
+  for (const [prefix, ttl] of Object.entries(CACHE_TTL_OVERRIDES)) {
+    if (basePath === prefix || basePath.startsWith(prefix + '/')) {
+      return ttl;
+    }
+  }
+  return DEFAULT_CACHE_TTL;
+};
 
 const getCached = (key) => {
   const entry = requestCache.get(key);
-  if (entry && Date.now() - entry.timestamp < CACHE_TTL) {
-    return entry.data;
+  if (entry && Date.now() - entry.timestamp < getCacheTTL(key)) {
+    return { data: entry.data, isStale: false };
+  }
+  // Stale-while-revalidate: return stale data with flag
+  if (entry) {
+    return { data: entry.data, isStale: true };
   }
   requestCache.delete(key);
   return null;
@@ -49,6 +74,19 @@ const invalidateCacheForUrl = (mutationUrl) => {
   for (const key of requestCache.keys()) {
     // Only invalidate if paths share the same base endpoint
     if (key.split('?')[0] === basePath) {
+      requestCache.delete(key);
+    }
+  }
+};
+
+// Expose cache invalidation for WebSocket-driven updates
+export const invalidateApiCache = (pattern) => {
+  if (!pattern) {
+    requestCache.clear();
+    return;
+  }
+  for (const key of requestCache.keys()) {
+    if (key.includes(pattern)) {
       requestCache.delete(key);
     }
   }
@@ -201,10 +239,41 @@ const cachedFetch = async (url, options = {}) => {
     return authenticatedFetch(url, options);
   }
 
-  // Check cache first — return a synthetic Response wrapping cached JSON
+  // Check cache first
   const cached = getCached(url);
-  if (cached !== null) {
-    return new Response(JSON.stringify(cached), {
+  if (cached !== null && !cached.isStale) {
+    // Fresh cache hit — return immediately
+    return new Response(JSON.stringify(cached.data), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    });
+  }
+
+  // Stale-while-revalidate: return stale data immediately, revalidate in background.
+  // Note: the caller receives stale data; the background fetch only updates the cache
+  // so the *next* request will get fresh data. No push notification to current consumers.
+  if (cached !== null && cached.isStale) {
+    // Fire background revalidation (don't await)
+    if (!inflightRequests.has(url)) {
+      const revalidate = authenticatedFetch(url, options).then(async (response) => {
+        inflightRequests.delete(url);
+        if (response.ok) {
+          try {
+            const cloned = response.clone();
+            const json = await cloned.json();
+            setCache(url, json);
+          } catch { /* skip */ }
+        }
+        return response;
+      }).catch(() => {
+        inflightRequests.delete(url);
+        // Background revalidation failed silently; stale cache remains
+      });
+      inflightRequests.set(url, revalidate);
+    }
+
+    // Return stale data immediately
+    return new Response(JSON.stringify(cached.data), {
       status: 200,
       headers: { 'Content-Type': 'application/json' },
     });

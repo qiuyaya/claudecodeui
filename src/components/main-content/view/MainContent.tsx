@@ -18,8 +18,18 @@ const EditorSidebar = lazy(() => import('../../code-editor/view/EditorSidebar'))
 const TaskMasterPanel = lazy(() => import('../../task-master').then(m => ({ default: m.TaskMasterPanel })));
 
 const TabFallback = () => (
-  <div className="flex h-full items-center justify-center">
-    <div className="h-6 w-6 animate-spin rounded-full border-2 border-gray-300 border-t-blue-500" />
+  <div className="flex h-full flex-col gap-3 p-4">
+    {/* Skeleton header */}
+    <div className="flex animate-pulse items-center gap-3">
+      <div className="h-5 w-5 rounded bg-gray-200 dark:bg-gray-700" />
+      <div className="h-4 w-32 rounded bg-gray-200 dark:bg-gray-700" />
+    </div>
+    {/* Skeleton content lines */}
+    {[72, 55, 88, 45, 65, 80].map((width, i) => (
+      <div key={i} className="animate-pulse" style={{ animationDelay: `${i * 75}ms` }}>
+        <div className="h-3.5 rounded bg-gray-200 dark:bg-gray-700" style={{ width: `${width}%` }} />
+      </div>
+    ))}
   </div>
 );
 

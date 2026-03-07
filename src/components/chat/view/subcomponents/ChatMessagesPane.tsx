@@ -280,8 +280,11 @@ function ChatMessagesPane({
           }}
           itemContent={(index, message) => {
             const prevMessage = index > 0 ? visibleMessages[index - 1] : null;
+            const isLastAssistantMessage = isLoading &&
+              index === visibleMessages.length - 1 &&
+              message.type === 'assistant';
             return (
-              <div className={`px-0 sm:px-4 ${index > 0 ? 'pt-3 sm:pt-4' : ''}`}>
+              <div className={`px-0 sm:px-4 ${index > 0 ? 'pt-3 sm:pt-4' : ''} ${isLastAssistantMessage ? 'streaming-cursor' : ''}`}>
                 <MessageComponent
                   message={message}
                   prevMessage={prevMessage}

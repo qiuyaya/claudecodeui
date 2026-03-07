@@ -34,6 +34,7 @@ import { AuthProvider } from './contexts/AuthContext';
 import { TaskMasterProvider } from './contexts/TaskMasterContext';
 import { TasksSettingsProvider } from './contexts/TasksSettingsContext';
 import { WebSocketProvider, useWebSocket } from './contexts/WebSocketContext';
+import ConnectionStatusBar from './components/app/ConnectionStatusBar';
 import ProtectedRoute from './components/ProtectedRoute';
 import { useVersionCheck } from './hooks/useVersionCheck';
 import useLocalStorage from './hooks/useLocalStorage';
@@ -1002,6 +1003,7 @@ function App() {
       <ThemeProvider>
         <AuthProvider>
           <WebSocketProvider>
+            <ConnectionStatusBar />
             <TasksSettingsProvider>
               <TaskMasterProvider>
                 <ProtectedRoute>

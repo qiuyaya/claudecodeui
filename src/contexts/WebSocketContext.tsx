@@ -74,6 +74,7 @@ const useWebSocketProviderState = (): WebSocketContextType => {
       try {
         const data = JSON.parse(event.data);
         setLatestMessage(data);
+        // Also dispatch to subscribers for direct consumption without re-render
         subscribersRef.current.forEach(handler => {
           try {
             handler(data);
@@ -86,9 +87,12 @@ const useWebSocketProviderState = (): WebSocketContextType => {
       }
     };
 
-    websocket.onclose = () => {
+    websocket.onclose = (event) => {
       setIsConnected(false);
       wsRef.current = null;
+
+      // Don't reconnect if the close was intentional (code 1000) or component unmounted
+      if (event.code === 1000 || unmountedRef.current) return;
 
       const attempt = reconnectAttemptsRef.current;
       const baseDelay = Math.min(1000 * Math.pow(2, attempt), MAX_RECONNECT_DELAY);

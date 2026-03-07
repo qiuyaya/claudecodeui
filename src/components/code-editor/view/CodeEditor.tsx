@@ -1,7 +1,7 @@
 import { EditorView } from '@codemirror/view';
 import { unifiedMergeView } from '@codemirror/merge';
 import type { Extension } from '@codemirror/state';
-import { useMemo, useState } from 'react';
+import { useMemo, useState, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useCodeEditorDocument } from '../hooks/useCodeEditorDocument';
 import { useCodeEditorSettings } from '../hooks/useCodeEditorSettings';
@@ -109,9 +109,19 @@ export default function CodeEditor({
     [file, isExpanded, isSidebar, onPopOut, onToggleExpand, showDiff, t],
   );
 
+  // Load language extensions asynchronously
+  const [langExtensions, setLangExtensions] = useState<Extension[]>([]);
+  useEffect(() => {
+    let cancelled = false;
+    getLanguageExtensions(file.name).then((exts) => {
+      if (!cancelled) setLangExtensions(exts);
+    });
+    return () => { cancelled = true; };
+  }, [file.name]);
+
   const extensions = useMemo(() => {
     const allExtensions: Extension[] = [
-      ...getLanguageExtensions(file.name),
+      ...langExtensions,
       ...toolbarPanelExtension,
     ];
 
@@ -136,7 +146,7 @@ export default function CodeEditor({
     return allExtensions;
   }, [
     file.diffInfo,
-    file.name,
+    langExtensions,
     minimapExtension,
     scrollToFirstChunkExtension,
     showDiff,

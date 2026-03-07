@@ -28,22 +28,22 @@ export default defineConfig(({ command, mode }) => {
         }
       }
     },
+    esbuild: {
+      drop: mode === 'production' ? ['debugger'] : [],
+      pure: mode === 'production' ? ['console.log', 'console.debug'] : [],
+    },
     build: {
       outDir: 'dist',
       sourcemap: false,
       chunkSizeWarningLimit: 1000,
+      minify: 'esbuild',
+      target: 'es2020',
       rollupOptions: {
         output: {
           manualChunks: {
             'vendor-react': ['react', 'react-dom', 'react-router-dom'],
             'vendor-codemirror': [
               '@uiw/react-codemirror',
-              '@codemirror/lang-css',
-              '@codemirror/lang-html',
-              '@codemirror/lang-javascript',
-              '@codemirror/lang-json',
-              '@codemirror/lang-markdown',
-              '@codemirror/lang-python',
               '@codemirror/theme-one-dark'
             ],
             'vendor-xterm': ['@xterm/xterm', '@xterm/addon-fit', '@xterm/addon-clipboard', '@xterm/addon-webgl'],

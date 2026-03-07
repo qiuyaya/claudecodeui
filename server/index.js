@@ -37,6 +37,7 @@ import os from 'os';
 import http from 'http';
 import cors from 'cors';
 import helmet from 'helmet';
+import compression from 'compression';
 import { promises as fsPromises } from 'fs';
 import { spawn } from 'child_process';
 import pty from 'node-pty';
@@ -324,6 +325,18 @@ if (process.env.NODE_ENV === 'production' && process.env.FORCE_HTTPS !== 'false'
     next();
   });
 }
+
+// Gzip/Brotli compression for all responses
+app.use(compression({
+  level: 6,
+  threshold: 1024, // Only compress responses > 1KB
+  filter: (req, res) => {
+    // Don't compress WebSocket upgrade requests or SSE streams
+    if (req.headers['upgrade'] === 'websocket') return false;
+    if (res.getHeader('Content-Type')?.includes('text/event-stream')) return false;
+    return compression.filter(req, res);
+  }
+}));
 
 // Helmet security headers
 app.use(helmet({
@@ -1562,6 +1575,10 @@ wss.on('connection', (ws, request) => {
     const url = request.url;
     console.log('[INFO] Client connected to:', url);
 
+    // Mark connection as alive for heartbeat
+    ws.isAlive = true;
+    ws.on('pong', () => { ws.isAlive = true; });
+
     // Note: WebSocket protocol is read-only and set during handshake
     // The selected protocol can be accessed via ws.protocol (getter only)
     // No need to set it here as it's already determined by the handshake
@@ -2707,7 +2724,7 @@ async function startServer() {
         await initializeDatabase();
 
         // Schedule periodic cleanup of expired refresh tokens (every 6 hours)
-        setInterval(() => {
+        const tokenCleanupInterval = setInterval(() => {
           try {
             const cleaned = refreshTokensDb.cleanupExpiredTokens();
             if (cleaned > 0) {
@@ -2717,6 +2734,24 @@ async function startServer() {
             console.error('[ERROR] Failed to cleanup expired tokens:', e.message);
           }
         }, 6 * 60 * 60 * 1000);
+        tokenCleanupInterval.unref(); // Don't prevent process exit
+
+        // WebSocket heartbeat: ping every 30s, terminate dead connections
+        const wsHeartbeatInterval = setInterval(() => {
+          wss.clients.forEach((ws) => {
+            if (ws.isAlive === false) {
+              connectedClients.delete(ws);
+              return ws.terminate();
+            }
+            ws.isAlive = false;
+            ws.ping();
+          });
+        }, 30000);
+        wsHeartbeatInterval.unref();
+
+        wss.on('close', () => {
+          clearInterval(wsHeartbeatInterval);
+        });
 
         // Check if running in production mode (dist folder exists)
         const distIndexPath = path.join(__dirname, '../dist/index.html');

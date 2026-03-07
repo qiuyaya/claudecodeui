@@ -1,13 +1,8 @@
-import { css } from '@codemirror/lang-css';
-import { html } from '@codemirror/lang-html';
-import { javascript } from '@codemirror/lang-javascript';
-import { json } from '@codemirror/lang-json';
 import { StreamLanguage } from '@codemirror/language';
-import { markdown } from '@codemirror/lang-markdown';
-import { python } from '@codemirror/lang-python';
 import { getChunks } from '@codemirror/merge';
 import { EditorView, ViewPlugin } from '@codemirror/view';
 import { showMinimap } from '@replit/codemirror-minimap';
+import type { Extension } from '@codemirror/state';
 import type { CodeEditorFile } from '../types/types';
 
 // Lightweight lexer for `.env` files (including `.env.*` variants).
@@ -27,38 +22,76 @@ const envLanguage = StreamLanguage.define({
   },
 });
 
-export const getLanguageExtensions = (filename: string) => {
+// Cache for dynamically loaded language extensions
+const languageCache = new Map<string, Extension[]>();
+
+// Dynamically load language extensions on demand
+export const getLanguageExtensions = async (filename: string): Promise<Extension[]> => {
   const lowerName = filename.toLowerCase();
   if (lowerName === '.env' || lowerName.startsWith('.env.')) {
     return [envLanguage];
   }
 
-  const ext = filename.split('.').pop()?.toLowerCase();
+  const ext = filename.split('.').pop()?.toLowerCase() || '';
+
+  // Return cached if available
+  if (languageCache.has(ext)) {
+    return languageCache.get(ext)!;
+  }
+
+  let extensions: Extension[] = [];
+
   switch (ext) {
     case 'js':
     case 'jsx':
     case 'ts':
-    case 'tsx':
-      return [javascript({ jsx: true, typescript: ext.includes('ts') })];
-    case 'py':
-      return [python()];
+    case 'tsx': {
+      const { javascript } = await import('@codemirror/lang-javascript');
+      extensions = [javascript({ jsx: true, typescript: ext.includes('ts') })];
+      break;
+    }
+    case 'py': {
+      const { python } = await import('@codemirror/lang-python');
+      extensions = [python()];
+      break;
+    }
     case 'html':
-    case 'htm':
-      return [html()];
+    case 'htm': {
+      const { html } = await import('@codemirror/lang-html');
+      extensions = [html()];
+      break;
+    }
     case 'css':
     case 'scss':
-    case 'less':
-      return [css()];
-    case 'json':
-      return [json()];
+    case 'less': {
+      const { css } = await import('@codemirror/lang-css');
+      extensions = [css()];
+      break;
+    }
+    case 'json': {
+      const { json } = await import('@codemirror/lang-json');
+      extensions = [json()];
+      break;
+    }
     case 'md':
-    case 'markdown':
-      return [markdown()];
+    case 'markdown': {
+      const { markdown } = await import('@codemirror/lang-markdown');
+      extensions = [markdown()];
+      break;
+    }
     case 'env':
-      return [envLanguage];
+      extensions = [envLanguage];
+      break;
     default:
-      return [];
+      extensions = [];
   }
+
+  // Cache the result
+  if (extensions.length > 0) {
+    languageCache.set(ext, extensions);
+  }
+
+  return extensions;
 };
 
 export const createMinimapExtension = ({

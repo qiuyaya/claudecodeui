@@ -388,7 +388,7 @@ function sendMessage(ws, data) {
 }
 
 // Clean up old completed sessions periodically
-setInterval(() => {
+const codexCleanupInterval = setInterval(() => {
   const now = Date.now();
   const maxAge = 30 * 60 * 1000; // 30 minutes
 
@@ -401,3 +401,4 @@ setInterval(() => {
     }
   }
 }, 5 * 60 * 1000); // Every 5 minutes
+codexCleanupInterval.unref(); // Don't prevent process exit

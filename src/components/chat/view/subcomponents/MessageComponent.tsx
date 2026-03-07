@@ -89,6 +89,11 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, o
   const formattedTime = useMemo(() => new Date(message.timestamp).toLocaleTimeString(), [message.timestamp]);
   const shouldHideThinkingMessage = Boolean(message.isThinking && !showThinking);
 
+  // Memoize Markdown content strings to avoid re-parsing
+  const toolDisplayText = useMemo(() => stripAnsi(String(message.displayText || '')), [message.displayText]);
+  const toolResultContent = useMemo(() => String(message.toolResult?.content || ''), [message.toolResult?.content]);
+  const mainContent = useMemo(() => stripAnsi(formatUsageLimitText(String(message.content || ''))), [message.content]);
+
   if (shouldHideThinkingMessage) {
     return null;
   }
@@ -205,7 +210,7 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, o
                 <div className="flex flex-col">
                   <div className="flex flex-col">
                     <Markdown className="prose prose-sm max-w-none dark:prose-invert">
-                      {stripAnsi(String(message.displayText || ''))}
+                      {toolDisplayText}
                     </Markdown>
                   </div>
                 </div>
@@ -244,7 +249,7 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, o
                       </div>
                       <div className="relative text-sm text-red-900 dark:text-red-100">
                         <Markdown className="prose prose-sm prose-red max-w-none dark:prose-invert">
-                          {String(message.toolResult.content || '')}
+                          {toolResultContent}
                         </Markdown>
                         {permissionSuggestion && (
                           <div className="mt-4 border-t border-red-200/60 pt-3 dark:border-red-800/60">
@@ -430,10 +435,8 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, o
                 )}
 
                 {(() => {
-                  const content = stripAnsi(formatUsageLimitText(String(message.content || '')));
-
                   // Detect if content is pure JSON (starts with { or [)
-                  const trimmedContent = content.trim();
+                  const trimmedContent = mainContent.trim();
                   if ((trimmedContent.startsWith('{') || trimmedContent.startsWith('[')) &&
                     (trimmedContent.endsWith('}') || trimmedContent.endsWith(']'))) {
                     try {
@@ -465,11 +468,11 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, o
                   // Normal rendering for non-JSON content
                   return message.type === 'assistant' ? (
                     <Markdown className="prose prose-sm prose-gray max-w-none dark:prose-invert">
-                      {content}
+                      {mainContent}
                     </Markdown>
                   ) : (
                     <div className="whitespace-pre-wrap">
-                      {content}
+                      {mainContent}
                     </div>
                   );
                 })()}

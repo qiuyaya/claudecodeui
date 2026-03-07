@@ -143,8 +143,8 @@ const markdownComponents = {
   ),
 };
 
-export function Markdown({ children, className }: MarkdownProps) {
-  const content = normalizeInlineCodeFences(String(children ?? ''));
+export const Markdown = React.memo(function Markdown({ children, className }: MarkdownProps) {
+  const content = useMemo(() => normalizeInlineCodeFences(String(children ?? '')), [children]);
   const remarkPlugins = useMemo(() => [remarkGfm, remarkMath], []);
   const rehypePlugins = useMemo(() => [rehypeKatex], []);
 
@@ -155,4 +155,4 @@ export function Markdown({ children, className }: MarkdownProps) {
       </ReactMarkdown>
     </div>
   );
-}
+});
