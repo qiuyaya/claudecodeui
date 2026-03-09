@@ -9,6 +9,7 @@ lerna-debug.log*
 # Build outputs
 dist/
 dist-ssr/
+dist-server/
 build/
 out/
 
@@ -129,6 +130,7 @@ dev-debug.log
 
 # Task files
 tasks.json
-tasks/ 
+tasks/
+task_plan.md
 
 .history
